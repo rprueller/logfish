@@ -2,9 +2,10 @@
   "name": "logfish",
   "displayName": "LogFish",
   "description": "Stream and filter large log files with line-based highlighting.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "rprueller",
   "repository": "https://github.com/rprueller/logfish",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
