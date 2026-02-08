@@ -277,7 +277,7 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     const resolved: HighlightRule[] = [];
     let foundGroup = false;
     for (const entry of configRules) {
-      if (this.isHighlightRuleGroup(entry)) {
+      if (!foundGroup && this.isHighlightRuleGroup(entry)) {
         if (this.matchesFilePattern(filePath, entry.filePattern, entry.filePatternIgnoreCase)) {
           resolved.push(...entry.rules.filter((rule) => this.isHighlightRule(rule)));
           foundGroup = true;
