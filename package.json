@@ -1,0 +1,137 @@
+{
+  "name": "logfish",
+  "displayName": "LogFish",
+  "description": "Stream and filter large log files with line-based highlighting. Supports both global and per-file settings for highlight rules and filter persistence. Uses efficient streaming to handle large files without memory blowups. Commands to open log files directly in LogFish or from the context menu. Custom editor with dynamic updates based on file changes and filter input. Highly customizable with glob patterns for file associations and highlight rules.",
+  "version": "0.1.0",
+  "publisher": "rprueller",
+  "repository": "https://github.com/rprueller/logfish",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "logFish.openLog",
+        "title": "LogFish: Open Log File"
+      },
+      {
+        "command": "logFish.openInViewer",
+        "title": "Open in LogFish"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "logFish.openInViewer",
+          "when": "resourceScheme == file",
+          "group": "navigation"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "logFish.viewer",
+        "displayName": "LogFish",
+        "priority": "option",
+        "selector": [
+          {
+            "filenamePattern": "**/*"
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "LogFish",
+      "properties": {
+        "logFish.fileAssociations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "*.log"
+          ],
+          "scope": "window",
+          "description": "Glob patterns to associate with the LogFish custom editor. These update workbench.editorAssociations."
+        },
+        "logFish.highlightRules": {
+          "type": "array",
+          "default": [
+            {
+              "filePattern": ".*\\.log",
+              "rules": [
+                {
+                  "pattern": "critical",
+                  "patternIgnoreCase": true,
+                  "color": "#ffffff",
+                  "background": "#c62828",
+                  "fontWeight": "bold"
+                },
+                {
+                  "pattern": "error",
+                  "patternIgnoreCase": true,
+                  "color": "#cc0000",
+                  "fontWeight": "bold"
+                },
+                {
+                  "pattern": "warn(ing)?",
+                  "patternIgnoreCase": true,
+                  "color": "#e87d02"
+                },
+                {
+                  "pattern": "debug",
+                  "patternIgnoreCase": true,
+                  "color": "#808080"
+                }
+              ]
+            }
+          ],
+          "scope": "resource",
+          "description": "Per-line highlighting rules or rule groups. Global rules will always be used, whereas only the first matching file pattern will be effective. Rule: { pattern, patternIgnoreCase?, color?, background?, fontStyle?, fontWeight? }. Group: { filePattern, filePatternIgnoreCase?, rules: [...] } applied when the full path matches."
+        },
+        "logFish.maxDisplayedLines": {
+          "type": "number",
+          "default": 2000000,
+          "minimum": 1000,
+          "scope": "resource",
+          "description": "Maximum number of matched lines kept in the UI to avoid memory blowups."
+        },
+        "logFish.filterDelayMs": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "scope": "resource",
+          "description": "Delay in ms before a changed filter input triggers a re-reading of the file."
+        },
+        "logFish.filterPersistence": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "global",
+            "workspaceThenGlobal"
+          ],
+          "default": "workspaceThenGlobal",
+          "scope": "resource",
+          "description": "Where to remember the last filter. workspace: per-workspace only. global: across all workspaces only. workspaceThenGlobal: prefer workspace value and also write global."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}
