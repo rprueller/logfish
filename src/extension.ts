@@ -197,7 +197,7 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     const config = vscode.workspace.getConfiguration('logFish', uri);
     return {
       highlightRules: config.get<HighlightRuleConfig>('highlightRules', []),
-      maxDisplayedLines: config.get<number>('maxDisplayedLines', 1000000),
+      maxDisplayedLines: config.get<number>('maxDisplayedLines', 2000000),
       filterDelayMs: config.get<number>('filterDelayMs', 250),
       filterPersistence: config.get<FilterPersistence>('filterPersistence', 'workspaceThenGlobal')
     };

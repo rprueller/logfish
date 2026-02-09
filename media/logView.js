@@ -26,6 +26,10 @@
   let dragging = false;
   let dragStartY = 0;
   let dragStartScrollTop = 0;
+  let rememberedLine = null;
+  let pendingScrollToRemembered = false;
+  let pendingLineTarget = null;
+  let pendingLines = null;
 
   const escapeHtml = (value) =>
     value
@@ -56,6 +60,11 @@
     if (!filterInput) {
       return;
     }
+    if (!Number.isFinite(rememberedLine)) {
+      rememberCenterLine();
+    }
+    pendingLineTarget = Number.isFinite(rememberedLine) ? rememberedLine : null;
+    pendingScrollToRemembered = true;
     vscode.postMessage({
       type: 'filterChanged',
       value: filterInput.value,
@@ -100,10 +109,10 @@
     const ruleIndex = checkRules(line.t);
     const className = ruleIndex >= 0 ? state.rules[ruleIndex].className : '';
     const cls = className ? `row ${className}` : 'row';
-    return `<div class="${cls}"><span class="txt">${escapeHtml(line.t)}</span></div>`;
+    return `<div class="${cls}" data-line="${line.n}"><span class="txt">${escapeHtml(line.t)}</span></div>`;
   };
 
-  const renderNumberLine = (line) => `<div class="row"><span class="ln">${line.n}</span></div>`;
+  const renderNumberLine = (line) => `<div class="row" data-line="${line.n}"><span class="ln">${line.n}</span></div>`;
 
   const getLineHeight = () => {
     const value = getComputedStyle(document.documentElement).getPropertyValue('--line-height');
@@ -128,6 +137,128 @@
     virtualScrollTop = next;
     scheduleRender();
     updateScrollbar();
+  };
+
+  const rememberLine = (lineNumber) => {
+    if (!Number.isFinite(lineNumber)) {
+      return;
+    }
+    rememberedLine = lineNumber;
+  };
+
+  const rememberCenterLine = () => {
+    if (!state.lines.length) {
+      return;
+    }
+    const lineHeight = getLineHeight();
+    const center = virtualScrollTop + getViewportHeight() / 2;
+    const index = clamp(Math.floor(center / lineHeight), 0, state.lines.length - 1);
+    const line = state.lines[index];
+    if (line) {
+      rememberLine(line.n);
+    }
+  };
+
+  const getLineNumberFromNode = (node) => {
+    if (!node) {
+      return null;
+    }
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    if (!element || typeof element.closest !== 'function') {
+      return null;
+    }
+    const row = element.closest('.row');
+    if (!row || !row.dataset) {
+      return null;
+    }
+    const lineNumber = Number.parseInt(row.dataset.line || '', 10);
+    return Number.isFinite(lineNumber) ? lineNumber : null;
+  };
+
+  const rememberLineFromEvent = (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return false;
+    }
+    const row = target.closest('.row');
+    if (!row || !row.dataset) {
+      return false;
+    }
+    const lineNumber = Number.parseInt(row.dataset.line || '', 10);
+    if (!Number.isFinite(lineNumber)) {
+      return false;
+    }
+    rememberLine(lineNumber);
+    return true;
+  };
+
+  const rememberLineFromSelection = () => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      return false;
+    }
+    const range = selection.getRangeAt(0);
+    const lineNumber = getLineNumberFromNode(range.startContainer);
+    if (!Number.isFinite(lineNumber)) {
+      return false;
+    }
+    rememberLine(lineNumber);
+    return true;
+  };
+
+  const findClosestLineIndex = (lineNumber) => {
+    if (!state.lines.length) {
+      return -1;
+    }
+    let lo = 0;
+    let hi = state.lines.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const current = state.lines[mid].n;
+      if (current === lineNumber) {
+        return mid;
+      }
+      if (current < lineNumber) {
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (lo >= state.lines.length) {
+      return state.lines.length - 1;
+    }
+    if (hi < 0) {
+      return 0;
+    }
+    const loDiff = Math.abs(state.lines[lo].n - lineNumber);
+    const hiDiff = Math.abs(state.lines[hi].n - lineNumber);
+    return loDiff < hiDiff ? lo : hi;
+  };
+
+  const scrollToLineIndex = (index) => {
+    if (!Number.isFinite(index) || index < 0) {
+      return;
+    }
+    const lineHeight = getLineHeight();
+    const targetTop = index * lineHeight - (getViewportHeight() / 2 - lineHeight / 2);
+    setVirtualScrollTop(targetTop);
+  };
+
+  const scrollToRememberedLine = () => {
+    if (!pendingScrollToRemembered) {
+      return;
+    }
+    pendingScrollToRemembered = false;
+    const targetLine = pendingLineTarget;
+    pendingLineTarget = null;
+    if (!Number.isFinite(targetLine)) {
+      return;
+    }
+    const index = findClosestLineIndex(targetLine);
+    if (index < 0) {
+      return;
+    }
+    scrollToLineIndex(index);
   };
 
   const getThumbMetrics = () => {
@@ -213,6 +344,7 @@
     }
     if (maxScrollTop > 0 && verticalDelta !== 0) {
       setVirtualScrollTop(virtualScrollTop + verticalDelta);
+      rememberCenterLine();
     }
 
     if (horizontalDelta !== 0 || (maxScrollTop > 0 && verticalDelta !== 0)) {
@@ -252,6 +384,7 @@
       const maxScrollTop = getMaxScrollTop();
       const scrollDelta = (deltaY / maxThumbTop) * maxScrollTop;
       setVirtualScrollTop(dragStartScrollTop + scrollDelta);
+      rememberCenterLine();
       event.preventDefault();
     });
 
@@ -282,7 +415,17 @@
       const maxScrollTop = getMaxScrollTop();
       const ratio = maxThumbTop > 0 ? thumbTop / maxThumbTop : 0;
       setVirtualScrollTop(ratio * maxScrollTop);
+      rememberCenterLine();
       event.preventDefault();
+    });
+  }
+
+  if (viewport) {
+    viewport.addEventListener('mouseup', (event) => {
+      if (rememberLineFromSelection()) {
+        return;
+      }
+      rememberLineFromEvent(event);
     });
   }
 
@@ -332,15 +475,14 @@
         break;
       }
       case 'append': {
-        state.lines.push(...(message.lines || []));
-        scheduleRender();
+        if (!pendingLines) {
+          pendingLines = [];
+        }
+        pendingLines.push(...(message.lines || []));
         break;
       }
       case 'reset': {
-        state.lines = [];
-        virtualScrollTop = 0;
-        updateScrollbar();
-        scheduleRender();
+        pendingLines = [];
         break;
       }
       case 'end': {
@@ -352,6 +494,17 @@
         //   setStatus(`${stats.matchedLines} lines${note}`);
         // }
         setStatus(`${stats.matchedLines} lines${note}`);
+        if (pendingLines !== null) {
+          state.lines = pendingLines;
+          pendingLines = null;
+        }
+        if (pendingScrollToRemembered) {
+          scrollToRememberedLine();
+        }
+        const maxScrollTop = getMaxScrollTop();
+        virtualScrollTop = clamp(virtualScrollTop, 0, maxScrollTop);
+        updateScrollbar();
+        scheduleRender();
         break;
       }
       case 'rulesUpdated': {
