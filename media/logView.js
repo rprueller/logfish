@@ -13,6 +13,8 @@
   const layoutStyleEl = document.getElementById('layoutStyles');
   const caseButton = document.getElementById('case');
 
+  const OVERSCAN_ROWS = 20;
+
   const state = {
     lines: [],
     rules: [],
@@ -20,6 +22,7 @@
     caseSensitive: false
   };
 
+  // View state for virtual scrolling and filter restore behavior.
   let renderScheduled = false;
   let debounceTimer = null;
   let virtualScrollTop = 0;
@@ -29,6 +32,7 @@
   let rememberedLine = null;
   let pendingScrollToRemembered = false;
   let pendingLineTarget = null;
+  // Buffer lines during filtering; swap into view once filtering ends.
   let pendingLines = null;
 
   const escapeHtml = (value) =>
@@ -60,6 +64,7 @@
     if (!filterInput) {
       return;
     }
+    // Capture the current context before filtering so we can restore it later.
     if (!Number.isFinite(rememberedLine)) {
       rememberCenterLine();
     }
@@ -159,11 +164,7 @@
     }
   };
 
-  const getLineNumberFromNode = (node) => {
-    if (!node) {
-      return null;
-    }
-    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  const getLineNumberFromElement = (element) => {
     if (!element || typeof element.closest !== 'function') {
       return null;
     }
@@ -175,16 +176,20 @@
     return Number.isFinite(lineNumber) ? lineNumber : null;
   };
 
+  const getLineNumberFromNode = (node) => {
+    if (!node) {
+      return null;
+    }
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    return getLineNumberFromElement(element);
+  };
+
   const rememberLineFromEvent = (event) => {
     const target = event.target;
     if (!(target instanceof Element)) {
       return false;
     }
-    const row = target.closest('.row');
-    if (!row || !row.dataset) {
-      return false;
-    }
-    const lineNumber = Number.parseInt(row.dataset.line || '', 10);
+    const lineNumber = getLineNumberFromElement(target);
     if (!Number.isFinite(lineNumber)) {
       return false;
     }
@@ -296,27 +301,37 @@
     const total = state.lines.length;
     const height = getViewportHeight();
 
-    const start = Math.max(0, Math.floor(virtualScrollTop / lineHeight) - 20);
-    const end = Math.min(total, Math.ceil((virtualScrollTop + height) / lineHeight) + 20);
+    const start = Math.max(0, Math.floor(virtualScrollTop / lineHeight) - OVERSCAN_ROWS);
+    const end = Math.min(total, Math.ceil((virtualScrollTop + height) / lineHeight) + OVERSCAN_ROWS);
 
     if (layoutStyleEl) {
       const offset = start * lineHeight - virtualScrollTop;
       layoutStyleEl.textContent = `#rows { top: ${offset}px; }\n#lnRowsInner { top: ${offset}px; }`;
     }
-    const visible = state.lines.slice(start, end);
+
     let maxDigits = 1;
-    for (const line of visible) {
+    const textHtml = [];
+    const numberHtml = lnRowsInner ? [] : null;
+    for (let i = start; i < end; i += 1) {
+      const line = state.lines[i];
+      if (!line) {
+        continue;
+      }
       const digits = String(line.n).length;
       if (digits > maxDigits) {
         maxDigits = digits;
+      }
+      textHtml.push(renderTextLine(line));
+      if (numberHtml) {
+        numberHtml.push(renderNumberLine(line));
       }
     }
     if (viewport) {
       viewport.style.setProperty('--ln-width', `calc(${maxDigits}ch + 20px)`);
     }
-    rows.innerHTML = visible.map(renderTextLine).join('');
-    if (lnRowsInner) {
-      lnRowsInner.innerHTML = visible.map(renderNumberLine).join('');
+    rows.innerHTML = textHtml.join('');
+    if (lnRowsInner && numberHtml) {
+      lnRowsInner.innerHTML = numberHtml.join('');
     }
     updateScrollbar();
   };
@@ -446,8 +461,10 @@
         clearTimeout(debounceTimer);
         debounceTimer = null;
       }
-      setStatus('Filtering...');
-      postFilterChanged();
+      if (filterInput.value) {
+        setStatus('Filtering...');
+        postFilterChanged();
+      }
     });
   }
 
@@ -488,12 +505,8 @@
       case 'end': {
         const stats = message.stats || { totalLines: null, matchedLines: 0, truncated: false };
         const note = stats.truncated ? ' (truncated)' : '';
-        // if (typeof stats.totalLines === 'number') {
-        //   setStatus(`${stats.matchedLines}/${stats.totalLines} lines${note}`);
-        // } else {
-        //   setStatus(`${stats.matchedLines} lines${note}`);
-        // }
         setStatus(`${stats.matchedLines} lines${note}`);
+        // Swap in the newly filtered lines in one shot to avoid partial redraws.
         if (pendingLines !== null) {
           state.lines = pendingLines;
           pendingLines = null;
