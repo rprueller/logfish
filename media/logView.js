@@ -176,6 +176,17 @@
     return Number.isFinite(lineNumber) ? lineNumber : null;
   };
 
+  const isEditableElement = (element) => {
+    if (!element) {
+      return false;
+    }
+    if (element.isContentEditable) {
+      return true;
+    }
+    const tag = element.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  };
+
   const getLineNumberFromNode = (node) => {
     if (!node) {
       return null;
@@ -367,11 +378,44 @@
     }
   };
 
+  const handleKeydown = (event) => {
+    if (isEditableElement(document.activeElement)) {
+      return;
+    }
+    const lineHeight = getLineHeight();
+    const pageDelta = Math.max(lineHeight, getViewportHeight() - lineHeight);
+    switch (event.key) {
+      case 'ArrowUp':
+        setVirtualScrollTop(virtualScrollTop - lineHeight);
+        break;
+      case 'ArrowDown':
+        setVirtualScrollTop(virtualScrollTop + lineHeight);
+        break;
+      case 'PageUp':
+        setVirtualScrollTop(virtualScrollTop - pageDelta);
+        break;
+      case 'PageDown':
+        setVirtualScrollTop(virtualScrollTop + pageDelta);
+        break;
+      case 'Home':
+        setVirtualScrollTop(0);
+        break;
+      case 'End':
+        setVirtualScrollTop(getMaxScrollTop());
+        break;
+      default:
+        return;
+    }
+    rememberCenterLine();
+    event.preventDefault();
+  };
+
   if (hscroll) {
     hscroll.addEventListener('wheel', handleWheel, { passive: false });
   } else {
     viewport.addEventListener('wheel', handleWheel, { passive: false });
   }
+  window.addEventListener('keydown', handleKeydown);
   window.addEventListener('resize', () => {
     updateScrollbar();
     scheduleRender();
