@@ -26,7 +26,7 @@
     "commands": [
       {
         "command": "logFish.openLog",
-        "title": "LogFish: Open Log File"
+        "title": "LogFish: Open File"
       },
       {
         "command": "logFish.openInViewer",
@@ -34,10 +34,16 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "logFish.openInViewer",
+          "when": "false"
+        }
+      ],
       "explorer/context": [
         {
           "command": "logFish.openInViewer",
-          "when": "resourceScheme == file",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote",
           "group": "navigation"
         }
       ]

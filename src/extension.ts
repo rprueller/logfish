@@ -743,7 +743,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('logFish.openLog', async () => {
       const picked = await vscode.window.showOpenDialog({
         canSelectMany: false,
-        openLabel: 'Open Log File'
+        openLabel: 'Open File'
       });
       if (!picked || picked.length === 0) {
         return;

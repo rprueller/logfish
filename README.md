@@ -5,6 +5,7 @@ Open massive log files in a custom editor with streaming + regex filtering + per
 ## Usage
 
 - Run `LogFish: Open Log File` from the Command Palette.
+- Or use explorer context menu and `Open in LogFish`.
 - Or open a file matching `logFish.fileAssociations` (defaults to `*.log`).
 
 ## Filter
@@ -68,5 +69,5 @@ Grouped rules example:
 
 - `logFish.fileAssociations`: Glob patterns to associate with the LogFish custom editor.
 - `logFish.highlightRules`: Array of per-line highlight rules or grouped rules with `filePattern` (first matching group wins).
-- `logFish.maxDisplayedLines`: Limit for lines kept in the UI (default 200000).
+- `logFish.maxDisplayedLines`: Limit for lines kept in the UI (default 1000000).
 - `logFish.filterDelayMs`: Debounce time for the filter input.
