@@ -69,5 +69,5 @@ Grouped rules example:
 
 - `logFish.fileAssociations`: Glob patterns to associate with the LogFish custom editor.
 - `logFish.highlightRules`: Array of per-line highlight rules or grouped rules with `filePattern` (first matching group wins).
-- `logFish.maxDisplayedLines`: Limit for lines kept in the UI (default 1000000).
+- `logFish.maxCachedLines`: Maximum number of matched lines cached in the UI while scrolling.
 - `logFish.filterDelayMs`: Debounce time for the filter input.

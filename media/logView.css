@@ -162,6 +162,10 @@ body {
   min-width: max-content;
 }
 
+.row-placeholder {
+  opacity: 0.65;
+}
+
 .ln {
   display: block;
   height: var(--line-height);

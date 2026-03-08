@@ -4,7 +4,6 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 
 const LOGFISH_VIEW_TYPE = 'logFish.viewer';
-const FILE_ASSOCIATIONS_STATE_KEY = 'logFish.fileAssociations.applied';
 
 type HighlightRule = {
   pattern: string;
@@ -29,12 +28,37 @@ type HighlightRuleConfig = Array<HighlightRule | HighlightRuleGroup>;
 
 type LogFishSettings = {
   highlightRules: HighlightRuleConfig;
-  maxDisplayedLines: number;
+  maxCachedLines: number;
   filterDelayMs: number;
   filterPersistence: FilterPersistence;
 };
 
-type EditorAssociations = Record<string, string>;
+type FilterBackend = 'rg' | 'grep' | 'js';
+type FilterPersistence = 'workspace' | 'global' | 'workspaceThenGlobal';
+
+type LinePayload = {
+  i: number;
+  n: number;
+  t: string;
+};
+
+type FilteredModelStats = {
+  totalLines: number;
+  matchedLines: number;
+  maxLineNumber: number;
+};
+
+type ProgressUpdate = {
+  phase: 'indexing' | 'filtering';
+  processed: number;
+  total: number | null;
+  matched: number;
+  detail?: string;
+};
+
+type CancelableTask = {
+  cancel: () => void;
+};
 
 class LogFishDocument implements vscode.CustomDocument {
   readonly uri: vscode.Uri;
@@ -51,12 +75,539 @@ class LogFishDocument implements vscode.CustomDocument {
   }
 }
 
-type StreamController = {
-  cancel: () => void;
-};
+class IndexedFileModel {
+  private readonly uri: vscode.Uri;
+  private indexed = false;
+  private lineStarts: number[] = [];
+  private lineEnds: number[] = [];
 
-type FilterBackend = 'rg' | 'grep' | 'js';
-type FilterPersistence = 'workspace' | 'global' | 'workspaceThenGlobal';
+  private filteredLineNumbers: number[] = [];
+  private filteredStarts: number[] = [];
+  private filteredEnds: number[] = [];
+
+  private activeFilterTask: CancelableTask | null = null;
+
+  constructor(uri: vscode.Uri) {
+    this.uri = uri;
+  }
+
+  cancelActiveFilter(): void {
+    if (this.activeFilterTask) {
+      this.activeFilterTask.cancel();
+      this.activeFilterTask = null;
+    }
+  }
+
+  async ensureIndexed(onProgress?: (update: ProgressUpdate) => void): Promise<void> {
+    if (this.indexed) {
+      return;
+    }
+
+    const stats = await fs.promises.stat(this.uri.fsPath);
+    const fileSize = stats.size;
+
+    const starts: number[] = [];
+    const ends: number[] = [];
+
+    if (fileSize === 0) {
+      this.lineStarts = starts;
+      this.lineEnds = ends;
+      this.filteredLineNumbers = [];
+      this.filteredStarts = [];
+      this.filteredEnds = [];
+      this.indexed = true;
+      onProgress?.({ phase: 'indexing', processed: 0, total: 0, matched: 0, detail: 'Indexed 0 lines' });
+      return;
+    }
+
+    onProgress?.({ phase: 'indexing', processed: 0, total: fileSize, matched: 0, detail: 'Building line index' });
+
+    await new Promise<void>((resolve, reject) => {
+      const stream = fs.createReadStream(this.uri.fsPath);
+      let lineStart = 0;
+      let absoluteOffset = 0;
+      let previousByte: number | null = null;
+      let lastProgressAt = Date.now();
+
+      stream.on('data', (chunk: Buffer | string) => {
+        const data = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+        for (let i = 0; i < data.length; i += 1) {
+          const byte = data[i];
+          if (byte === 0x0a) {
+            let lineEnd = absoluteOffset + i;
+            if (previousByte === 0x0d && lineEnd > lineStart) {
+              lineEnd -= 1;
+            }
+            starts.push(lineStart);
+            ends.push(lineEnd);
+            lineStart = absoluteOffset + i + 1;
+          }
+          previousByte = byte;
+        }
+        absoluteOffset += data.length;
+        const now = Date.now();
+        if (now - lastProgressAt >= 250) {
+          onProgress?.({
+            phase: 'indexing',
+            processed: absoluteOffset,
+            total: fileSize,
+            matched: starts.length,
+            detail: 'Building line index'
+          });
+          lastProgressAt = now;
+        }
+      });
+
+      stream.on('error', (error) => reject(error));
+      stream.on('end', () => {
+        if (lineStart < fileSize) {
+          starts.push(lineStart);
+          ends.push(fileSize);
+        }
+        resolve();
+      });
+    });
+
+    this.lineStarts = starts;
+    this.lineEnds = ends;
+    this.filteredLineNumbers = [];
+    this.filteredStarts = [];
+    this.filteredEnds = [];
+    this.indexed = true;
+    onProgress?.({
+      phase: 'indexing',
+      processed: fileSize,
+      total: fileSize,
+      matched: this.lineStarts.length,
+      detail: `Indexed ${this.lineStarts.length} lines`
+    });
+  }
+
+  async buildFilteredModel(
+    filterText: string,
+    caseSensitive: boolean,
+    backend: FilterBackend,
+    onProgress?: (update: ProgressUpdate) => void
+  ): Promise<FilteredModelStats> {
+    await this.ensureIndexed(onProgress);
+    this.cancelActiveFilter();
+
+    const totalLines = this.lineStarts.length;
+    const maxLineNumber = totalLines;
+    const trimmedFilter = filterText.trim();
+
+    onProgress?.({
+      phase: 'filtering',
+      processed: 0,
+      total: totalLines,
+      matched: 0,
+      detail: 'Preparing filter'
+    });
+
+    if (trimmedFilter.length === 0) {
+      const allNumbers: number[] = new Array(totalLines);
+      const allStarts: number[] = new Array(totalLines);
+      const allEnds: number[] = new Array(totalLines);
+      for (let i = 0; i < totalLines; i += 1) {
+        allNumbers[i] = i + 1;
+        allStarts[i] = this.lineStarts[i];
+        allEnds[i] = this.lineEnds[i];
+      }
+      this.filteredLineNumbers = allNumbers;
+      this.filteredStarts = allStarts;
+      this.filteredEnds = allEnds;
+      onProgress?.({
+        phase: 'filtering',
+        processed: totalLines,
+        total: totalLines,
+        matched: totalLines,
+        detail: 'No filter applied'
+      });
+      return {
+        totalLines,
+        matchedLines: totalLines,
+        maxLineNumber
+      };
+    }
+
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const lineNumbers: number[] = [];
+
+    const appendLine = (lineNumber: number) => {
+      const idx = lineNumber - 1;
+      if (idx < 0 || idx >= this.lineStarts.length) {
+        return;
+      }
+      lineNumbers.push(lineNumber);
+      starts.push(this.lineStarts[idx]);
+      ends.push(this.lineEnds[idx]);
+    };
+
+    if (backend === 'rg' || backend === 'grep') {
+      await this.filterWithExternalTool(filterText, backend, caseSensitive, appendLine, totalLines, onProgress);
+    } else {
+      await this.filterWithJs(filterText, caseSensitive, appendLine, totalLines, onProgress);
+    }
+
+    this.filteredLineNumbers = lineNumbers;
+    this.filteredStarts = starts;
+    this.filteredEnds = ends;
+
+    onProgress?.({
+      phase: 'filtering',
+      processed: totalLines,
+      total: totalLines,
+      matched: lineNumbers.length,
+      detail: 'Filter complete'
+    });
+
+    return {
+      totalLines,
+      matchedLines: lineNumbers.length,
+      maxLineNumber
+    };
+  }
+
+  private filterWithExternalTool(
+    filterText: string,
+    backend: Exclude<FilterBackend, 'js'>,
+    caseSensitive: boolean,
+    onMatch: (lineNumber: number) => void,
+    totalLines: number,
+    onProgress?: (update: ProgressUpdate) => void
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const caseFlag = caseSensitive ? [] : ['-i'];
+      const args =
+        backend === 'rg'
+          ? [
+              ...caseFlag,
+              '--no-messages',
+              '--line-number',
+              '--no-filename',
+              '--color',
+              'never',
+              '--text',
+              '-e',
+              filterText,
+              this.uri.fsPath
+            ]
+          : [...caseFlag, '-n', '-E', '-a', '--color=never', '-e', filterText, this.uri.fsPath];
+
+      const proc = spawn(backend, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let buffer = '';
+      let stderr = '';
+      let cancelled = false;
+      let matched = 0;
+      const progressTimer = setInterval(() => {
+        onProgress?.({
+          phase: 'filtering',
+          processed: 0,
+          total: totalLines,
+          matched,
+          detail: `Filtering with ${backend}`
+        });
+      }, 300);
+
+      this.activeFilterTask = {
+        cancel: () => {
+          cancelled = true;
+          proc.kill();
+        }
+      };
+
+      const parseLine = (line: string) => {
+        if (!line) {
+          return;
+        }
+        const colonIndex = line.indexOf(':');
+        if (colonIndex < 0) {
+          return;
+        }
+        const lineNumber = Number.parseInt(line.slice(0, colonIndex), 10);
+        if (!Number.isFinite(lineNumber)) {
+          return;
+        }
+        matched += 1;
+        onMatch(lineNumber);
+      };
+
+      proc.stdout.on('data', (chunk: Buffer | string) => {
+        if (cancelled) {
+          return;
+        }
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        const data = buffer + text;
+        const parts = data.split(/\r?\n/);
+        buffer = parts.pop() ?? '';
+        for (const line of parts) {
+          parseLine(line);
+        }
+      });
+
+      proc.stderr.on('data', (chunk: Buffer | string) => {
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        if (stderr.length < 2000) {
+          stderr += text;
+        }
+      });
+
+      proc.on('error', (error) => {
+        clearInterval(progressTimer);
+        if (cancelled) {
+          resolve();
+          return;
+        }
+        reject(error);
+      });
+
+      proc.on('close', (exitCode) => {
+        clearInterval(progressTimer);
+        this.activeFilterTask = null;
+        if (cancelled) {
+          resolve();
+          return;
+        }
+
+        if (buffer.length > 0) {
+          parseLine(buffer);
+        }
+
+        // rg/grep exit code 1 means "no matches".
+        if (exitCode !== null && exitCode > 1) {
+          reject(new Error(stderr.trim() || `Failed to run ${backend}.`));
+          return;
+        }
+        onProgress?.({
+          phase: 'filtering',
+          processed: totalLines,
+          total: totalLines,
+          matched,
+          detail: `Filtered with ${backend}`
+        });
+        resolve();
+      });
+    });
+  }
+
+  private filterWithJs(
+    filterText: string,
+    caseSensitive: boolean,
+    onMatch: (lineNumber: number) => void,
+    totalLines: number,
+    onProgress?: (update: ProgressUpdate) => void
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let regex: RegExp;
+      try {
+        regex = caseSensitive ? new RegExp(filterText) : new RegExp(filterText, 'i');
+      } catch {
+        reject(new Error('Invalid filter regex.'));
+        return;
+      }
+
+      const stream = fs.createReadStream(this.uri.fsPath, {
+        encoding: 'utf8',
+        highWaterMark: 64 * 1024
+      });
+      let cancelled = false;
+      let buffer = '';
+      let lineNumber = 0;
+      let matched = 0;
+      let lastProgressAt = Date.now();
+
+      this.activeFilterTask = {
+        cancel: () => {
+          cancelled = true;
+          stream.destroy();
+        }
+      };
+
+      const pushLine = (line: string) => {
+        lineNumber += 1;
+        regex.lastIndex = 0;
+        if (regex.test(line)) {
+          matched += 1;
+          onMatch(lineNumber);
+        }
+        const now = Date.now();
+        if (now - lastProgressAt >= 250) {
+          onProgress?.({
+            phase: 'filtering',
+            processed: lineNumber,
+            total: totalLines,
+            matched,
+            detail: 'Filtering with JS'
+          });
+          lastProgressAt = now;
+        }
+      };
+
+      stream.on('data', (chunk: string | Buffer) => {
+        if (cancelled) {
+          return;
+        }
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        const data = buffer + text;
+        const parts = data.split(/\r?\n/);
+        buffer = parts.pop() ?? '';
+        for (const line of parts) {
+          pushLine(line);
+        }
+      });
+
+      stream.on('error', (error) => {
+        this.activeFilterTask = null;
+        if (cancelled) {
+          resolve();
+          return;
+        }
+        reject(error);
+      });
+
+      stream.on('end', () => {
+        this.activeFilterTask = null;
+        if (cancelled) {
+          resolve();
+          return;
+        }
+        if (buffer.length > 0) {
+          pushLine(buffer);
+        }
+        onProgress?.({
+          phase: 'filtering',
+          processed: totalLines,
+          total: totalLines,
+          matched,
+          detail: 'Filtered with JS'
+        });
+        resolve();
+      });
+    });
+  }
+
+  async getFilteredSlice(start: number, count: number): Promise<LinePayload[]> {
+    await this.ensureIndexed();
+
+    const safeStart = Math.max(0, start);
+    const safeCount = Math.max(0, count);
+    const safeEnd = Math.min(this.filteredStarts.length, safeStart + safeCount);
+    if (safeStart >= safeEnd) {
+      return [];
+    }
+
+    const result: LinePayload[] = [];
+
+    const mergeGapBytes = 256;
+    const maxMergedBytes = 512 * 1024;
+    type ReadSegment = {
+      startIndex: number;
+      endIndex: number;
+      byteStart: number;
+      byteEnd: number;
+    };
+
+    const segments: ReadSegment[] = [];
+    let segmentStartIndex = safeStart;
+    let segmentEndIndex = safeStart;
+    let segmentByteStart = this.filteredStarts[safeStart];
+    let segmentByteEnd = this.filteredEnds[safeStart];
+
+    for (let i = safeStart + 1; i < safeEnd; i += 1) {
+      const nextStart = this.filteredStarts[i];
+      const nextEnd = this.filteredEnds[i];
+      const gap = Math.max(0, nextStart - segmentByteEnd);
+      const mergedBytes = nextEnd - segmentByteStart;
+      const canMerge = gap <= mergeGapBytes && mergedBytes <= maxMergedBytes;
+
+      if (canMerge) {
+        segmentEndIndex = i;
+        if (nextEnd > segmentByteEnd) {
+          segmentByteEnd = nextEnd;
+        }
+      } else {
+        segments.push({
+          startIndex: segmentStartIndex,
+          endIndex: segmentEndIndex,
+          byteStart: segmentByteStart,
+          byteEnd: segmentByteEnd
+        });
+        segmentStartIndex = i;
+        segmentEndIndex = i;
+        segmentByteStart = nextStart;
+        segmentByteEnd = nextEnd;
+      }
+    }
+
+    segments.push({
+      startIndex: segmentStartIndex,
+      endIndex: segmentEndIndex,
+      byteStart: segmentByteStart,
+      byteEnd: segmentByteEnd
+    });
+
+    const handle = await fs.promises.open(this.uri.fsPath, 'r');
+    try {
+      for (const segment of segments) {
+        const segmentLength = Math.max(0, segment.byteEnd - segment.byteStart);
+        const segmentBuffer = segmentLength > 0 ? Buffer.allocUnsafe(segmentLength) : Buffer.alloc(0);
+        if (segmentLength > 0) {
+          await handle.read(segmentBuffer, 0, segmentLength, segment.byteStart);
+        }
+
+        for (let i = segment.startIndex; i <= segment.endIndex; i += 1) {
+          const byteStart = this.filteredStarts[i] - segment.byteStart;
+          const byteEnd = this.filteredEnds[i] - segment.byteStart;
+          const startOffset = Math.max(0, byteStart);
+          const endOffset = Math.max(startOffset, byteEnd);
+          const text = segmentBuffer.toString('utf8', startOffset, endOffset);
+          result.push({
+            i,
+            n: this.filteredLineNumbers[i],
+            t: text
+          });
+        }
+      }
+      return result;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  findClosestFilteredIndex(lineNumber: number): number {
+    if (this.filteredLineNumbers.length === 0) {
+      return -1;
+    }
+
+    let lo = 0;
+    let hi = this.filteredLineNumbers.length - 1;
+
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const current = this.filteredLineNumbers[mid];
+      if (current === lineNumber) {
+        return mid;
+      }
+      if (current < lineNumber) {
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    if (lo >= this.filteredLineNumbers.length) {
+      return this.filteredLineNumbers.length - 1;
+    }
+    if (hi < 0) {
+      return 0;
+    }
+
+    const loDiff = Math.abs(this.filteredLineNumbers[lo] - lineNumber);
+    const hiDiff = Math.abs(this.filteredLineNumbers[hi] - lineNumber);
+    return loDiff < hiDiff ? lo : hi;
+  }
+}
 
 class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocument> {
   private readonly context: vscode.ExtensionContext;
@@ -88,61 +639,53 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
 
     webview.html = this.getWebviewHtml(webview, this.context.extensionUri);
 
-    let currentStream: StreamController | null = null;
+    const model = new IndexedFileModel(document.uri);
     let currentFilter = this.readFilterState(document.uri, this.getSettings(document.uri));
     let currentCaseSensitive = false;
+    let modelVersion = 0;
 
-    const startStream = async (filterText: string, caseSensitive: boolean) => {
-      if (currentStream) {
-        currentStream.cancel();
-        currentStream = null;
-      }
+    const loadModel = async (filterText: string, caseSensitive: boolean) => {
+      modelVersion += 1;
+      const version = modelVersion;
+      model.cancelActiveFilter();
+      webview.postMessage({ type: 'reset', version });
 
       const settings = this.getSettings(document.uri);
-      const backend = await this.getFilterBackend();
-      const trimmedFilter = filterText.trim();
-      const isEmptyFilter = trimmedFilter.length === 0;
+      const trimmed = filterText.trim();
 
-      const useJs = backend === 'js' || isEmptyFilter;
-      if (useJs) {
-        const filterRegex = isEmptyFilter ? null : this.compileFilter(filterText, caseSensitive);
-        if (filterRegex === null && !isEmptyFilter) {
-          webview.postMessage({ type: 'error', message: 'Invalid filter regex.' });
-          webview.postMessage({ type: 'reset' });
+      try {
+        const backend = trimmed.length > 0 ? await this.getFilterBackend() : 'js';
+        const stats = await model.buildFilteredModel(filterText, caseSensitive, backend, (update) => {
+          if (version !== modelVersion) {
+            return;
+          }
+          webview.postMessage({
+            type: 'progress',
+            version,
+            progress: update
+          });
+        });
+        if (version !== modelVersion) {
           return;
         }
 
-        webview.postMessage({ type: 'reset' });
-
-        currentStream = this.streamFileJs(
-          document.uri,
-          filterRegex,
-          settings.maxDisplayedLines,
-          (lines) => webview.postMessage({ type: 'append', lines }),
-          (stats) => webview.postMessage({ type: 'end', stats }),
-          {
-            batchSize: isEmptyFilter ? 1000 : 200,
-            highWaterMark: isEmptyFilter ? 256 * 1024 : 64 * 1024,
-            stopAfterMax: isEmptyFilter
-          }
-        );
-        return;
+        webview.postMessage({
+          type: 'modelReady',
+          version,
+          stats
+        });
+      } catch (error) {
+        if (version !== modelVersion) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'Filtering failed.';
+        webview.postMessage({ type: 'error', message });
       }
 
-      webview.postMessage({ type: 'reset' });
-
-      const externalPattern = isEmptyFilter ? '^' : filterText;
-
-      currentStream = this.streamFileExternal(
-        document.uri,
-        externalPattern,
-        backend,
-        caseSensitive,
-        settings.maxDisplayedLines,
-        (lines) => webview.postMessage({ type: 'append', lines }),
-        (stats) => webview.postMessage({ type: 'end', stats }),
-        (message) => webview.postMessage({ type: 'error', message })
-      );
+      // Read setting again to pick up potential changes while filtering.
+      if (settings.maxCachedLines <= 0) {
+        webview.postMessage({ type: 'error', message: 'logFish.maxCachedLines must be greater than 0.' });
+      }
     };
 
     webview.onDidReceiveMessage(async (message) => {
@@ -157,10 +700,11 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
             rules: resolved.rules,
             cssText: resolved.cssText,
             debounceMs: settings.filterDelayMs,
+            maxCachedLines: settings.maxCachedLines,
             filterText: currentFilter,
             caseSensitive: currentCaseSensitive
           });
-          await startStream(currentFilter, currentCaseSensitive);
+          await loadModel(currentFilter, currentCaseSensitive);
           break;
         }
         case 'filterChanged': {
@@ -170,7 +714,31 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
           }
           const settings = this.getSettings(document.uri);
           this.persistFilterState(document.uri, settings, currentFilter);
-          await startStream(currentFilter, currentCaseSensitive);
+          await loadModel(currentFilter, currentCaseSensitive);
+          break;
+        }
+        case 'requestRange': {
+          const start = Number.parseInt(String(message.start ?? '0'), 10);
+          const count = Number.parseInt(String(message.count ?? '0'), 10);
+          const version = Number.parseInt(String(message.version ?? '-1'), 10);
+          if (version !== modelVersion) {
+            return;
+          }
+          const lines = await model.getFilteredSlice(start, count);
+          if (version !== modelVersion) {
+            return;
+          }
+          webview.postMessage({ type: 'rangeData', version, start, count, lines });
+          break;
+        }
+        case 'requestClosestIndex': {
+          const lineNumber = Number.parseInt(String(message.lineNumber ?? '-1'), 10);
+          const version = Number.parseInt(String(message.version ?? '-1'), 10);
+          if (version !== modelVersion || !Number.isFinite(lineNumber) || lineNumber < 1) {
+            return;
+          }
+          const index = model.findClosestFilteredIndex(lineNumber);
+          webview.postMessage({ type: 'closestIndexResult', version, index });
           break;
         }
         case 'requestRules': {
@@ -186,10 +754,7 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     });
 
     webviewPanel.onDidDispose(() => {
-      if (currentStream) {
-        currentStream.cancel();
-        currentStream = null;
-      }
+      model.cancelActiveFilter();
     });
   }
 
@@ -197,7 +762,7 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     const config = vscode.workspace.getConfiguration('logFish', uri);
     return {
       highlightRules: config.get<HighlightRuleConfig>('highlightRules', []),
-      maxDisplayedLines: config.get<number>('maxDisplayedLines', 2000000),
+      maxCachedLines: config.get<number>('maxCachedLines', 100000),
       filterDelayMs: config.get<number>('filterDelayMs', 250),
       filterPersistence: config.get<FilterPersistence>('filterPersistence', 'workspaceThenGlobal')
     };
@@ -348,21 +913,6 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     }
   }
 
-  private compileFilter(filterText: string, caseSensitive: boolean): RegExp | null {
-    if (filterText.trim().length === 0) {
-      return null;
-    }
-
-    try {
-      if (caseSensitive) {
-        return new RegExp(filterText);
-      }
-      return new RegExp(filterText, 'i');
-    } catch {
-      return null;
-    }
-  }
-
   private getFilterBackend(): Promise<FilterBackend> {
     if (!this.filterBackend) {
       this.filterBackend = this.detectFilterBackend();
@@ -386,235 +936,6 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
       proc.on('error', () => resolve(false));
       proc.on('close', () => resolve(true));
     });
-  }
-
-  private streamFileExternal(
-    uri: vscode.Uri,
-    filterText: string,
-    backend: Exclude<FilterBackend, 'js'>,
-    caseSensitive: boolean,
-    maxDisplayedLines: number,
-    onLines: (lines: { n: number; t: string }[]) => void,
-    onEnd: (stats: { totalLines: number | null; matchedLines: number; truncated: boolean }) => void,
-    onError: (message: string) => void
-  ): StreamController {
-    const caseFlag = caseSensitive ? [] : ['-i'];
-    let args: string[];
-    if (backend === 'rg') {
-      args = [...caseFlag, '--no-messages', '--line-number', '--no-filename', '--color', 'never', '--text', '-e', filterText, uri.fsPath];
-    } else {
-      args = [...caseFlag, '-n', '-E', '-a', '--color=never', '-e', filterText, uri.fsPath];
-    }
-    const proc = spawn(backend, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let cancelled = false;
-    let buffer = '';
-    let matchedLines = 0;
-    let truncated = false;
-    let batch: { n: number; t: string }[] = [];
-    let stderr = '';
-
-    const flush = () => {
-      if (batch.length > 0) {
-        onLines(batch);
-        batch = [];
-      }
-    };
-
-    const pushLine = (line: string) => {
-      if (!line) {
-        return;
-      }
-      const colonIndex = line.indexOf(':');
-      if (colonIndex === -1) {
-        return;
-      }
-      const lineNumberText = line.slice(0, colonIndex);
-      const lineNumber = Number.parseInt(lineNumberText, 10);
-      if (!Number.isFinite(lineNumber)) {
-        return;
-      }
-      const content = line.slice(colonIndex + 1);
-
-      matchedLines += 1;
-      if (matchedLines <= maxDisplayedLines) {
-        batch.push({ n: lineNumber, t: content });
-        if (batch.length >= 200) {
-          flush();
-        }
-      } else {
-        truncated = true;
-      }
-    };
-
-    proc.stdout.on('data', (chunk: string | Buffer) => {
-      if (cancelled) {
-        return;
-      }
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      const data = buffer + text;
-      const parts = data.split(/\r?\n/);
-      buffer = parts.pop() ?? '';
-      for (const line of parts) {
-        if (cancelled) {
-          return;
-        }
-        pushLine(line);
-      }
-    });
-
-    proc.stderr.on('data', (chunk: string | Buffer) => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      if (stderr.length < 2000) {
-        stderr += text;
-      }
-    });
-
-    const finish = (exitCode: number | null) => {
-      if (cancelled) {
-        return;
-      }
-      if (buffer.length > 0) {
-        pushLine(buffer);
-      }
-      flush();
-
-      const isError = exitCode !== null && exitCode >= 2;
-      if (isError) {
-        const message = stderr.trim() || 'Filter process failed.';
-        onError(message);
-      }
-      onEnd({ totalLines: null, matchedLines, truncated });
-    };
-
-    proc.on('error', () => {
-      if (cancelled) {
-        return;
-      }
-      flush();
-      onError(`Failed to run ${backend}.`);
-      onEnd({ totalLines: null, matchedLines, truncated });
-    });
-
-    proc.on('close', finish);
-
-    return {
-      cancel: () => {
-        cancelled = true;
-        proc.kill();
-      }
-    };
-  }
-
-  private streamFileJs(
-    uri: vscode.Uri,
-    filterRegex: RegExp | null,
-    maxDisplayedLines: number,
-    onLines: (lines: { n: number; t: string }[]) => void,
-    onEnd: (stats: { totalLines: number | null; matchedLines: number; truncated: boolean }) => void,
-    options?: { batchSize?: number; highWaterMark?: number; stopAfterMax?: boolean }
-  ): StreamController {
-    const batchSize = options?.batchSize ?? 200;
-    const highWaterMark = options?.highWaterMark ?? 64 * 1024;
-    const stream = fs.createReadStream(uri.fsPath, {
-      encoding: 'utf8',
-      highWaterMark
-    });
-
-    let cancelled = false;
-    let buffer = '';
-    let lineNumber = 0;
-    let matchedLines = 0;
-    let truncated = false;
-    let batch: { n: number; t: string }[] = [];
-    let finished = false;
-
-    const flush = () => {
-      if (batch.length > 0) {
-        onLines(batch);
-        batch = [];
-      }
-    };
-
-    const pushLine = (line: string) => {
-      lineNumber += 1;
-      if (filterRegex) {
-        filterRegex.lastIndex = 0;
-      }
-      const matches = filterRegex ? filterRegex.test(line) : true;
-      if (!matches) {
-        return;
-      }
-      matchedLines += 1;
-      if (matchedLines <= maxDisplayedLines) {
-        batch.push({ n: lineNumber, t: line });
-        if (batch.length >= batchSize) {
-          flush();
-        }
-      } else {
-        truncated = true;
-        if (options?.stopAfterMax) {
-          matchedLines = maxDisplayedLines;
-          cancelled = true;
-          stream.destroy();
-        }
-      }
-    };
-
-    const finish = (totalLines: number | null) => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      onEnd({ totalLines, matchedLines, truncated });
-    };
-
-    stream.on('data', (chunk: string | Buffer) => {
-      if (cancelled) {
-        return;
-      }
-
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      const data = buffer + text;
-      const parts = data.split(/\r?\n/);
-      buffer = parts.pop() ?? '';
-      for (const line of parts) {
-        if (cancelled) {
-          return;
-        }
-        pushLine(line);
-        if (cancelled) {
-          flush();
-          finish(null);
-          return;
-        }
-      }
-    });
-
-    stream.on('end', () => {
-      if (cancelled) {
-        return;
-      }
-      if (buffer.length > 0) {
-        pushLine(buffer);
-      }
-      flush();
-      finish(lineNumber);
-    });
-
-    stream.on('error', () => {
-      if (cancelled) {
-        return;
-      }
-      flush();
-      finish(lineNumber);
-    });
-
-    return {
-      cancel: () => {
-        cancelled = true;
-        stream.destroy();
-      }
-    };
   }
 
   private getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -666,78 +987,8 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
   }
 }
 
-const normalizeFileAssociations = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== 'string') {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-  return normalized;
-};
-
-const getAssociationTarget = (): vscode.ConfigurationTarget => {
-  if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-    return vscode.ConfigurationTarget.Workspace;
-  }
-  return vscode.ConfigurationTarget.Global;
-};
-
-const syncFileAssociations = async (context: vscode.ExtensionContext): Promise<void> => {
-  const logFishConfig = vscode.workspace.getConfiguration('logFish');
-  const desired = normalizeFileAssociations(logFishConfig.get('fileAssociations', ['*.log']));
-  const previous = context.workspaceState.get<string[]>(FILE_ASSOCIATIONS_STATE_KEY, []);
-  const workbenchConfig = vscode.workspace.getConfiguration('workbench');
-  const current = workbenchConfig.get<EditorAssociations>('editorAssociations', {});
-  const next: EditorAssociations = { ...current };
-  let modified = false;
-
-  for (const pattern of previous) {
-    if (!desired.includes(pattern) && next[pattern] === LOGFISH_VIEW_TYPE) {
-      delete next[pattern];
-      modified = true;
-    }
-  }
-
-  for (const pattern of desired) {
-    if (next[pattern] !== LOGFISH_VIEW_TYPE) {
-      next[pattern] = LOGFISH_VIEW_TYPE;
-      modified = true;
-    }
-  }
-
-  if (modified) {
-    try {
-      await workbenchConfig.update('editorAssociations', next, getAssociationTarget());
-    } catch (error) {
-      console.warn('Failed to update editorAssociations for LogFish.', error);
-    }
-  }
-
-  await context.workspaceState.update(FILE_ASSOCIATIONS_STATE_KEY, desired);
-};
-
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(LogFishProvider.register(context));
-  void syncFileAssociations(context);
-
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('logFish.fileAssociations')) {
-        void syncFileAssociations(context);
-      }
-    })
-  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('logFish.openLog', async () => {

@@ -55,25 +55,19 @@
         "priority": "option",
         "selector": [
           {
-            "filenamePattern": "**/*"
+            "filenamePattern": "*"
           }
         ]
       }
     ],
+    "configurationDefaults": {
+      "workbench.editorAssociations": {
+        "*.log": "logFish.viewer"
+      }
+    },
     "configuration": {
       "title": "LogFish",
       "properties": {
-        "logFish.fileAssociations": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "*.log"
-          ],
-          "scope": "window",
-          "description": "Glob patterns to associate with the LogFish custom editor. These update workbench.editorAssociations."
-        },
         "logFish.highlightRules": {
           "type": "array",
           "default": [
@@ -109,12 +103,12 @@
           "scope": "resource",
           "description": "Per-line highlighting rules or rule groups. Global rules will always be used, whereas only the first matching file pattern will be effective. Rule: { pattern, patternIgnoreCase?, color?, background?, fontStyle?, fontWeight? }. Group: { filePattern, filePatternIgnoreCase?, rules: [...] } applied when the full path matches."
         },
-        "logFish.maxDisplayedLines": {
+        "logFish.maxCachedLines": {
           "type": "number",
-          "default": 2000000,
-          "minimum": 1000,
+          "default": 20000,
+          "minimum": 500,
           "scope": "resource",
-          "description": "Maximum number of matched lines kept in the UI to avoid memory blowups."
+          "description": "Maximum number of matched lines cached in the UI while scrolling."
         },
         "logFish.filterDelayMs": {
           "type": "number",

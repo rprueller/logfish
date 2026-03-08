@@ -14,15 +14,22 @@
   const caseButton = document.getElementById('case');
 
   const OVERSCAN_ROWS = 20;
+  const FETCH_CHUNK_SIZE = 300;
+  const PREFETCH_PADDING = 250;
 
   const state = {
-    lines: [],
     rules: [],
     debounceMs: 250,
-    caseSensitive: false
+    caseSensitive: false,
+    maxCachedLines: 20000,
+    version: 0,
+    totalLines: 0,
+    matchedLines: 0,
+    maxLineNumber: 0,
+    cache: new Map(),
+    pendingRanges: new Set()
   };
 
-  // View state for virtual scrolling and filter restore behavior.
   let renderScheduled = false;
   let debounceTimer = null;
   let virtualScrollTop = 0;
@@ -31,9 +38,6 @@
   let dragStartScrollTop = 0;
   let rememberedLine = null;
   let pendingScrollToRemembered = false;
-  let pendingLineTarget = null;
-  // Buffer lines during filtering; swap into view once filtering ends.
-  let pendingLines = null;
 
   const escapeHtml = (value) =>
     value
@@ -45,6 +49,13 @@
 
   const setStatus = (message) => {
     statusEl.textContent = message;
+  };
+
+  const formatNumber = (value) => {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    return Math.max(0, Math.trunc(value)).toLocaleString();
   };
 
   const updateCaseUi = () => {
@@ -60,16 +71,40 @@
     updateCaseUi();
   };
 
+  const clearCache = () => {
+    state.cache.clear();
+    state.pendingRanges.clear();
+  };
+
+  const getCachedLine = (index) => {
+    if (!state.cache.has(index)) {
+      return null;
+    }
+    const value = state.cache.get(index);
+    state.cache.delete(index);
+    state.cache.set(index, value);
+    return value;
+  };
+
+  const addCachedLine = (index, value) => {
+    if (state.cache.has(index)) {
+      state.cache.delete(index);
+    }
+    state.cache.set(index, value);
+    while (state.cache.size > state.maxCachedLines) {
+      const oldestKey = state.cache.keys().next().value;
+      state.cache.delete(oldestKey);
+    }
+  };
+
   const postFilterChanged = () => {
     if (!filterInput) {
       return;
     }
-    // Capture the current context before filtering so we can restore it later.
     if (!Number.isFinite(rememberedLine)) {
       rememberCenterLine();
     }
-    pendingLineTarget = Number.isFinite(rememberedLine) ? rememberedLine : null;
-    pendingScrollToRemembered = true;
+    pendingScrollToRemembered = Number.isFinite(rememberedLine);
     vscode.postMessage({
       type: 'filterChanged',
       value: filterInput.value,
@@ -83,7 +118,6 @@
       if (!rule || !rule.pattern) {
         continue;
       }
-
       const flags = rule.patternIgnoreCase ? 'ig' : 'g';
       try {
         const regex = new RegExp(rule.pattern, flags);
@@ -110,14 +144,20 @@
     return -1;
   };
 
-  const renderTextLine = (line) => {
+  const renderTextRow = (index, line) => {
+    if (!line) {
+      return `<div class="row row-placeholder" data-index="${index}"><span class="txt"></span></div>`;
+    }
     const ruleIndex = checkRules(line.t);
     const className = ruleIndex >= 0 ? state.rules[ruleIndex].className : '';
-    const cls = className ? `row ${className}` : 'row';
-    return `<div class="${cls}" data-line="${line.n}"><span class="txt">${escapeHtml(line.t)}</span></div>`;
+    const classes = className ? `row ${className}` : 'row';
+    return `<div class="${classes}" data-line="${line.n}" data-index="${index}"><span class="txt">${escapeHtml(line.t)}</span></div>`;
   };
 
-  const renderNumberLine = (line) => `<div class="row" data-line="${line.n}"><span class="ln">${line.n}</span></div>`;
+  const renderNumberRow = (index, line) => {
+    const text = line ? String(line.n) : '';
+    return `<div class="row" data-index="${index}"><span class="ln">${text}</span></div>`;
+  };
 
   const getLineHeight = () => {
     const value = getComputedStyle(document.documentElement).getPropertyValue('--line-height');
@@ -127,7 +167,7 @@
 
   const getViewportHeight = () => (hscroll ? hscroll.clientHeight : viewport.clientHeight);
 
-  const getTotalHeight = () => state.lines.length * getLineHeight();
+  const getTotalHeight = () => state.totalLines * getLineHeight();
 
   const getMaxScrollTop = () => Math.max(0, getTotalHeight() - getViewportHeight());
 
@@ -152,13 +192,13 @@
   };
 
   const rememberCenterLine = () => {
-    if (!state.lines.length) {
+    if (state.totalLines === 0) {
       return;
     }
     const lineHeight = getLineHeight();
     const center = virtualScrollTop + getViewportHeight() / 2;
-    const index = clamp(Math.floor(center / lineHeight), 0, state.lines.length - 1);
-    const line = state.lines[index];
+    const index = clamp(Math.floor(center / lineHeight), 0, state.totalLines - 1);
+    const line = getCachedLine(index);
     if (line) {
       rememberLine(line.n);
     }
@@ -222,33 +262,15 @@
     return true;
   };
 
-  const findClosestLineIndex = (lineNumber) => {
-    if (!state.lines.length) {
-      return -1;
+  const requestClosestIndex = () => {
+    if (!pendingScrollToRemembered || !Number.isFinite(rememberedLine)) {
+      return;
     }
-    let lo = 0;
-    let hi = state.lines.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const current = state.lines[mid].n;
-      if (current === lineNumber) {
-        return mid;
-      }
-      if (current < lineNumber) {
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    if (lo >= state.lines.length) {
-      return state.lines.length - 1;
-    }
-    if (hi < 0) {
-      return 0;
-    }
-    const loDiff = Math.abs(state.lines[lo].n - lineNumber);
-    const hiDiff = Math.abs(state.lines[hi].n - lineNumber);
-    return loDiff < hiDiff ? lo : hi;
+    vscode.postMessage({
+      type: 'requestClosestIndex',
+      lineNumber: rememberedLine,
+      version: state.version
+    });
   };
 
   const scrollToLineIndex = (index) => {
@@ -258,23 +280,6 @@
     const lineHeight = getLineHeight();
     const targetTop = index * lineHeight - (getViewportHeight() / 2 - lineHeight / 2);
     setVirtualScrollTop(targetTop);
-  };
-
-  const scrollToRememberedLine = () => {
-    if (!pendingScrollToRemembered) {
-      return;
-    }
-    pendingScrollToRemembered = false;
-    const targetLine = pendingLineTarget;
-    pendingLineTarget = null;
-    if (!Number.isFinite(targetLine)) {
-      return;
-    }
-    const index = findClosestLineIndex(targetLine);
-    if (index < 0) {
-      return;
-    }
-    scrollToLineIndex(index);
   };
 
   const getThumbMetrics = () => {
@@ -305,11 +310,73 @@
     scrollbarThumb.style.transform = `translateY(${thumbTop}px)`;
   };
 
+  const requestRange = (start, count) => {
+    if (count <= 0 || state.totalLines <= 0) {
+      return;
+    }
+    const safeStart = clamp(start, 0, Math.max(0, state.totalLines - 1));
+    const safeCount = Math.min(count, state.totalLines - safeStart);
+    if (safeCount <= 0) {
+      return;
+    }
+    const key = `${state.version}:${safeStart}:${safeCount}`;
+    if (state.pendingRanges.has(key)) {
+      return;
+    }
+    state.pendingRanges.add(key);
+    vscode.postMessage({
+      type: 'requestRange',
+      start: safeStart,
+      count: safeCount,
+      version: state.version
+    });
+  };
+
+  const ensureRangeLoaded = (start, endExclusive) => {
+    if (state.totalLines <= 0) {
+      return;
+    }
+    const safeStart = clamp(start, 0, state.totalLines);
+    const safeEnd = clamp(endExclusive, 0, state.totalLines);
+    if (safeStart >= safeEnd) {
+      return;
+    }
+
+    let missingStart = -1;
+    let missingCount = 0;
+
+    for (let i = safeStart; i < safeEnd; i += 1) {
+      const hasLine = state.cache.has(i);
+      if (!hasLine) {
+        if (missingStart < 0) {
+          missingStart = i;
+          missingCount = 1;
+        } else {
+          missingCount += 1;
+        }
+
+        if (missingCount >= FETCH_CHUNK_SIZE) {
+          requestRange(missingStart, missingCount);
+          missingStart = -1;
+          missingCount = 0;
+        }
+      } else if (missingStart >= 0) {
+        requestRange(missingStart, missingCount);
+        missingStart = -1;
+        missingCount = 0;
+      }
+    }
+
+    if (missingStart >= 0) {
+      requestRange(missingStart, missingCount);
+    }
+  };
+
   const render = () => {
     renderScheduled = false;
 
     const lineHeight = getLineHeight();
-    const total = state.lines.length;
+    const total = state.totalLines;
     const height = getViewportHeight();
 
     const start = Math.max(0, Math.floor(virtualScrollTop / lineHeight) - OVERSCAN_ROWS);
@@ -320,30 +387,31 @@
       layoutStyleEl.textContent = `#rows { top: ${offset}px; }\n#lnRowsInner { top: ${offset}px; }`;
     }
 
-    let maxDigits = 1;
+    const prefetchStart = Math.max(0, start - PREFETCH_PADDING);
+    const prefetchEnd = Math.min(total, end + PREFETCH_PADDING);
+    ensureRangeLoaded(prefetchStart, prefetchEnd);
+
+    const maxDigits = Math.max(1, String(Math.max(state.maxLineNumber, 1)).length);
     const textHtml = [];
     const numberHtml = lnRowsInner ? [] : null;
+
     for (let i = start; i < end; i += 1) {
-      const line = state.lines[i];
-      if (!line) {
-        continue;
-      }
-      const digits = String(line.n).length;
-      if (digits > maxDigits) {
-        maxDigits = digits;
-      }
-      textHtml.push(renderTextLine(line));
+      const line = getCachedLine(i);
+      textHtml.push(renderTextRow(i, line));
       if (numberHtml) {
-        numberHtml.push(renderNumberLine(line));
+        numberHtml.push(renderNumberRow(i, line));
       }
     }
+
     if (viewport) {
       viewport.style.setProperty('--ln-width', `calc(${maxDigits}ch + 20px)`);
     }
+
     rows.innerHTML = textHtml.join('');
     if (lnRowsInner && numberHtml) {
       lnRowsInner.innerHTML = numberHtml.join('');
     }
+
     updateScrollbar();
   };
 
@@ -357,7 +425,7 @@
 
   const handleWheel = (event) => {
     const maxScrollTop = getMaxScrollTop();
-    const horizontalDelta = event.deltaX !== 0 ? event.deltaX : (event.shiftKey ? event.deltaY : 0);
+    const horizontalDelta = event.deltaX !== 0 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
     if (horizontalDelta !== 0) {
       if (hscroll) {
         hscroll.scrollLeft += horizontalDelta;
@@ -415,6 +483,7 @@
   } else {
     viewport.addEventListener('wheel', handleWheel, { passive: false });
   }
+
   window.addEventListener('keydown', handleKeydown);
   window.addEventListener('resize', () => {
     updateScrollbar();
@@ -505,10 +574,8 @@
         clearTimeout(debounceTimer);
         debounceTimer = null;
       }
-      if (filterInput.value) {
-        setStatus('Filtering...');
-        postFilterChanged();
-      }
+      setStatus('Filtering...');
+      postFilterChanged();
     });
   }
 
@@ -518,6 +585,7 @@
       case 'init': {
         state.rules = compileRules(message.rules || []);
         state.debounceMs = message.debounceMs || 250;
+        state.maxCachedLines = Math.max(500, Number.parseInt(String(message.maxCachedLines || '20000'), 10) || 20000);
         if (filterInput && typeof message.filterText === 'string') {
           filterInput.value = message.filterText;
         }
@@ -535,32 +603,101 @@
         scheduleRender();
         break;
       }
-      case 'append': {
-        if (!pendingLines) {
-          pendingLines = [];
-        }
-        pendingLines.push(...(message.lines || []));
-        break;
-      }
       case 'reset': {
-        pendingLines = [];
+        state.version = Number.parseInt(String(message.version ?? `${state.version + 1}`), 10);
+        clearCache();
+        state.totalLines = 0;
+        state.matchedLines = 0;
+        state.maxLineNumber = 0;
+        virtualScrollTop = 0;
+        scheduleRender();
+        setStatus('Loading...');
         break;
       }
-      case 'end': {
-        const stats = message.stats || { totalLines: null, matchedLines: 0, truncated: false };
-        const note = stats.truncated ? ' (truncated)' : '';
-        setStatus(`${stats.matchedLines} lines${note}`);
-        // Swap in the newly filtered lines in one shot to avoid partial redraws.
-        if (pendingLines !== null) {
-          state.lines = pendingLines;
-          pendingLines = null;
+      case 'modelReady': {
+        const messageVersion = Number.parseInt(String(message.version ?? '-1'), 10);
+        if (messageVersion !== state.version) {
+          return;
         }
+        const stats = message.stats || { totalLines: 0, matchedLines: 0, maxLineNumber: 0 };
+        state.totalLines = Number.parseInt(String(stats.matchedLines || 0), 10);
+        state.matchedLines = state.totalLines;
+        state.maxLineNumber = Number.parseInt(String(stats.maxLineNumber || stats.totalLines || 0), 10);
+
         if (pendingScrollToRemembered) {
-          scrollToRememberedLine();
+          requestClosestIndex();
+        } else {
+          virtualScrollTop = clamp(virtualScrollTop, 0, getMaxScrollTop());
+          scheduleRender();
         }
-        const maxScrollTop = getMaxScrollTop();
-        virtualScrollTop = clamp(virtualScrollTop, 0, maxScrollTop);
+
+        setStatus(`${state.matchedLines} lines`);
         updateScrollbar();
+        scheduleRender();
+        break;
+      }
+      case 'progress': {
+        const version = Number.parseInt(String(message.version ?? '-1'), 10);
+        if (version !== state.version) {
+          return;
+        }
+        const progress = message.progress || {};
+        const phase = String(progress.phase || '');
+        const processed = Number.parseInt(String(progress.processed ?? '0'), 10);
+        const totalRaw = progress.total;
+        const total = totalRaw === null || totalRaw === undefined ? null : Number.parseInt(String(totalRaw), 10);
+        const matched = Number.parseInt(String(progress.matched ?? '0'), 10);
+        const detail = typeof progress.detail === 'string' && progress.detail.length > 0 ? progress.detail : null;
+
+        if (phase === 'indexing') {
+          if (Number.isFinite(total) && total > 0) {
+            const pct = Math.min(100, Math.floor((processed / total) * 100));
+            setStatus(`Indexing ${pct}% (${formatNumber(processed)}/${formatNumber(total)} bytes)`);
+          } else {
+            setStatus(detail || 'Indexing...');
+          }
+          break;
+        }
+
+        if (phase === 'filtering') {
+          if (Number.isFinite(total) && total > 0 && processed > 0) {
+            const pct = Math.min(100, Math.floor((processed / total) * 100));
+            setStatus(`Filtering ${pct}% (${formatNumber(matched)} matches)`);
+          } else {
+            setStatus(detail ? `${detail} (${formatNumber(matched)} matches)` : `Filtering... (${formatNumber(matched)} matches)`);
+          }
+        }
+        break;
+      }
+      case 'rangeData': {
+        const version = Number.parseInt(String(message.version ?? '-1'), 10);
+        if (version !== state.version) {
+          return;
+        }
+        const start = Number.parseInt(String(message.start ?? '0'), 10);
+        const count = Number.parseInt(String(message.count ?? '0'), 10);
+        const lines = message.lines || [];
+        const key = `${version}:${start}:${count}`;
+        state.pendingRanges.delete(key);
+        for (const line of lines) {
+          if (!line || !Number.isFinite(line.i)) {
+            continue;
+          }
+          addCachedLine(line.i, { n: line.n, t: String(line.t ?? '') });
+        }
+        scheduleRender();
+        break;
+      }
+      case 'closestIndexResult': {
+        const version = Number.parseInt(String(message.version ?? '-1'), 10);
+        if (version !== state.version) {
+          return;
+        }
+        const index = Number.parseInt(String(message.index ?? '-1'), 10);
+        pendingScrollToRemembered = false;
+        if (index >= 0) {
+          scrollToLineIndex(index);
+        }
         scheduleRender();
         break;
       }
