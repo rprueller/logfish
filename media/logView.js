@@ -12,6 +12,8 @@
   const dynamicStyleEl = document.getElementById('dynamicStyles');
   const layoutStyleEl = document.getElementById('layoutStyles');
   const caseButton = document.getElementById('case');
+  const filterDropdown = document.getElementById('filterDropdown');
+  const filterToggle = document.getElementById('filterToggle');
 
   const OVERSCAN_ROWS = 20;
   const FETCH_CHUNK_SIZE = 300;
@@ -27,7 +29,8 @@
     matchedLines: 0,
     maxLineNumber: 0,
     cache: new Map(),
-    pendingRanges: new Set()
+    pendingRanges: new Set(),
+    savedFilters: []
   };
 
   let renderScheduled = false;
@@ -38,6 +41,7 @@
   let dragStartScrollTop = 0;
   let rememberedLine = null;
   let pendingScrollToRemembered = false;
+  let dropdownOpen = false;
 
   const escapeHtml = (value) =>
     value
@@ -94,6 +98,51 @@
     while (state.cache.size > state.maxCachedLines) {
       const oldestKey = state.cache.keys().next().value;
       state.cache.delete(oldestKey);
+    }
+  };
+
+  const renderDropdown = () => {
+    if (!filterDropdown) { return; }
+    const html = [];
+    for (const filter of state.savedFilters) {
+      const esc = escapeHtml(filter);
+      html.push(
+        `<div class="filter-dropdown-item" data-value="${esc}">` +
+        `<span class="filter-dropdown-text">${esc}</span>` +
+        `<button class="filter-dropdown-delete" data-action="delete" data-value="${esc}" title="Delete">\u00d7</button>` +
+        `</div>`
+      );
+    }
+    const saveDisabled = filterInput && filterInput.value.trim() ? '' : ' disabled';
+    html.push(
+      `<div class="filter-dropdown-item filter-dropdown-save-row">` +
+      `<span class="filter-dropdown-text filter-dropdown-save-label"></span>` +
+      `<button class="filter-dropdown-save" data-action="save" title="Save current filter"${saveDisabled}>+</button>` +
+      `</div>`
+    );
+    filterDropdown.innerHTML = html.join('');
+  };
+
+  const openDropdown = () => {
+    if (!filterDropdown || dropdownOpen) { return; }
+    dropdownOpen = true;
+    renderDropdown();
+    filterDropdown.removeAttribute('hidden');
+    if (filterToggle) {
+      filterToggle.innerHTML = '&#9650;';
+      filterToggle.setAttribute('aria-expanded', 'true');
+      filterToggle.title = 'Hide saved filters';
+    }
+  };
+
+  const closeDropdown = () => {
+    if (!filterDropdown || !dropdownOpen) { return; }
+    dropdownOpen = false;
+    filterDropdown.setAttribute('hidden', '');
+    if (filterToggle) {
+      filterToggle.innerHTML = '&#9660;';
+      filterToggle.setAttribute('aria-expanded', 'false');
+      filterToggle.title = 'Show saved filters';
     }
   };
 
@@ -562,6 +611,7 @@
       clearTimeout(debounceTimer);
     }
     setStatus('Filtering...');
+    if (dropdownOpen) { renderDropdown(); }
     debounceTimer = setTimeout(() => {
       postFilterChanged();
     }, state.debounceMs);
@@ -576,6 +626,83 @@
       }
       setStatus('Filtering...');
       postFilterChanged();
+    });
+  }
+
+  if (filterInput) {
+    filterInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && dropdownOpen) {
+        closeDropdown();
+        event.preventDefault();
+      } else if (event.key === 'Enter' && dropdownOpen) {
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
+        postFilterChanged();
+        closeDropdown();
+        event.preventDefault();
+      }
+    });
+  }
+
+  if (filterToggle) {
+    filterToggle.addEventListener('click', () => {
+      if (dropdownOpen) {
+        closeDropdown();
+      } else {
+        openDropdown();
+      }
+    });
+  }
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!dropdownOpen) { return; }
+    const target = event.target;
+    if (!(target instanceof Element)) { return; }
+    const filterWrap = filterToggle ? filterToggle.closest('.filter-wrap') : null;
+    if (filterWrap && filterWrap.contains(target)) { return; }
+    closeDropdown();
+  });
+
+  if (filterDropdown) {
+    filterDropdown.addEventListener('mousedown', (event) => {
+      // Keep focus on the input while interacting with the dropdown.
+      event.preventDefault();
+    });
+
+    filterDropdown.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) { return; }
+
+      const deleteBtn = target.closest('[data-action="delete"]');
+      if (deleteBtn) {
+        vscode.postMessage({ type: 'deleteFilter', value: deleteBtn.dataset.value ?? '' });
+        return;
+      }
+
+      if (target.closest('[data-action="save"]')) {
+        const val = filterInput ? filterInput.value : '';
+        if (val.trim()) {
+          vscode.postMessage({ type: 'saveFilter', value: val });
+        }
+        return;
+      }
+
+      const item = target.closest('.filter-dropdown-item[data-value]');
+      if (item) {
+        const val = item.dataset.value ?? '';
+        if (filterInput) {
+          filterInput.value = val;
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
+          postFilterChanged();
+        }
+        vscode.postMessage({ type: 'saveFilter', value: val });
+        closeDropdown();
+      }
     });
   }
 
@@ -597,6 +724,7 @@
         if (dynamicStyleEl) {
           dynamicStyleEl.textContent = message.cssText || '';
         }
+        state.savedFilters = Array.isArray(message.savedFilters) ? message.savedFilters : [];
         setStatus('Loading...');
         virtualScrollTop = 0;
         updateScrollbar();
@@ -707,6 +835,13 @@
           dynamicStyleEl.textContent = message.cssText || '';
         }
         scheduleRender();
+        break;
+      }
+      case 'savedFiltersUpdated': {
+        state.savedFilters = Array.isArray(message.filters) ? message.filters : [];
+        if (dropdownOpen) {
+          renderDropdown();
+        }
         break;
       }
       case 'error': {

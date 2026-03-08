@@ -25,6 +25,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
+  overflow: visible;
 }
 
 #filterInput {
@@ -34,12 +35,117 @@ body {
   border: 1px solid var(--vscode-input-border, rgba(0, 0, 0, 0.2));
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
-  padding: 0 5px;
+  padding: 0 calc(var(--filter-input-height) + 2px) 0 5px;
   outline: none;
+  box-sizing: border-box;
 }
 
 #filterInput:focus {
   border-color: var(--vscode-focusBorder);
+}
+
+.filter-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.filter-toggle {
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--filter-input-height);
+  height: calc(var(--filter-input-height) - 2px);
+  background: none;
+  border: none;
+  color: var(--vscode-input-foreground);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--vscode-editor-font-size) * 0.7);
+  opacity: 0.6;
+  border-radius: 4px;
+  padding: 0;
+}
+
+.filter-toggle:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.filter-toggle:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+
+.filter-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  border-radius: 0px;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, rgba(0, 0, 0, 0.2)));
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.filter-dropdown-item {
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  height: var(--filter-input-height);
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.filter-dropdown-item:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.filter-dropdown-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.filter-dropdown-delete,
+.filter-dropdown-save {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  opacity: 0.55;
+  padding: 2px 4px;
+  font-size: 1em;
+  line-height: 1;
+  border-radius: 3px;
+}
+
+.filter-dropdown-delete:hover,
+.filter-dropdown-save:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.filter-dropdown-save:disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+}
+
+.filter-dropdown-save-row {
+  border-top: 1px solid var(--vscode-panel-border, rgba(0, 0, 0, 0.15));
+  cursor: default;
 }
 
 .case {

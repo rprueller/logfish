@@ -4,6 +4,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 
 const LOGFISH_VIEW_TYPE = 'logFish.viewer';
+const SAVED_FILTERS_KEY = 'logFish.savedFilters';
 
 type HighlightRule = {
   pattern: string;
@@ -702,6 +703,7 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
             debounceMs: settings.filterDelayMs,
             maxCachedLines: settings.maxCachedLines,
             filterText: currentFilter,
+            savedFilters: this.readSavedFilters(settings),
             caseSensitive: currentCaseSensitive
           });
           await loadModel(currentFilter, currentCaseSensitive);
@@ -746,6 +748,20 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
           const rules = await this.loadHighlightRules(document.uri, settings.highlightRules);
           const resolved = this.buildRuleStyles(rules);
           webview.postMessage({ type: 'rulesUpdated', rules: resolved.rules, cssText: resolved.cssText });
+          break;
+        }
+        case 'saveFilter': {
+          const value = String(message.value ?? '');
+          const settings = this.getSettings(document.uri);
+          const filters = this.addToSavedFilters(settings, value);
+          webview.postMessage({ type: 'savedFiltersUpdated', filters });
+          break;
+        }
+        case 'deleteFilter': {
+          const value = String(message.value ?? '');
+          const settings = this.getSettings(document.uri);
+          const filters = this.deleteFromSavedFilters(settings, value);
+          webview.postMessage({ type: 'savedFiltersUpdated', filters });
           break;
         }
         default:
@@ -800,6 +816,56 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
         void this.context.globalState.update(key, value);
         break;
     }
+  }
+
+  private readSavedFilters(settings: LogFishSettings): string[] {
+    switch (settings.filterPersistence) {
+      case 'workspace':
+        return this.context.workspaceState.get<string[]>(SAVED_FILTERS_KEY, []);
+      case 'global':
+        return this.context.globalState.get<string[]>(SAVED_FILTERS_KEY, []);
+      case 'workspaceThenGlobal':
+      default:
+        return (
+          this.context.workspaceState.get<string[]>(SAVED_FILTERS_KEY) ??
+          this.context.globalState.get<string[]>(SAVED_FILTERS_KEY) ??
+          []
+        );
+    }
+  }
+
+  private persistSavedFilters(settings: LogFishSettings, filters: string[]): void {
+    switch (settings.filterPersistence) {
+      case 'workspace':
+        void this.context.workspaceState.update(SAVED_FILTERS_KEY, filters);
+        break;
+      case 'global':
+        void this.context.globalState.update(SAVED_FILTERS_KEY, filters);
+        break;
+      case 'workspaceThenGlobal':
+      default:
+        void this.context.workspaceState.update(SAVED_FILTERS_KEY, filters);
+        void this.context.globalState.update(SAVED_FILTERS_KEY, filters);
+        break;
+    }
+  }
+
+  private addToSavedFilters(settings: LogFishSettings, value: string): string[] {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return this.readSavedFilters(settings);
+    }
+    const current = this.readSavedFilters(settings);
+    const deduped = [trimmed, ...current.filter((f) => f !== trimmed)];
+    this.persistSavedFilters(settings, deduped);
+    return deduped;
+  }
+
+  private deleteFromSavedFilters(settings: LogFishSettings, value: string): string[] {
+    const current = this.readSavedFilters(settings);
+    const updated = current.filter((f) => f !== value);
+    this.persistSavedFilters(settings, updated);
+    return updated;
   }
 
   private async loadHighlightRules(uri: vscode.Uri, fallback: HighlightRuleConfig): Promise<HighlightRule[]> {
@@ -957,7 +1023,11 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
 </head>
 <body>
   <div class="toolbar">
-    <input id="filterInput" type="text" placeholder="Filter (regex)" />
+    <div class="filter-wrap">
+      <input id="filterInput" type="text" placeholder="Filter (regex)" />
+      <button id="filterToggle" class="filter-toggle" type="button" title="Show saved filters" aria-expanded="false">&#9660;</button>
+      <div id="filterDropdown" class="filter-dropdown" hidden></div>
+    </div>
     <button id="case" class="case" type="button" aria-pressed="false" title="Match case">Aa</button>
     <div id="status" class="status">Ready</div>
   </div>
