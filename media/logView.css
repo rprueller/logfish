@@ -1,6 +1,5 @@
 :root {
-  --filter-input-height: calc(var(--vscode-editor-font-size) * 2);
-  --toolbar-height: calc(var(--filter-input-height) + 10px);
+  --filter-input-height: calc(var(--vscode-editor-font-size) * 1.8);
   --line-height: calc(var(--vscode-editor-font-size) * 1.4);
 }
 
@@ -11,15 +10,19 @@ body {
   font-size: var(--vscode-editor-font-size, 13px);
   color: var(--vscode-editor-foreground);
   background: var(--vscode-editor-background);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .toolbar {
-  height: var(--toolbar-height);
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 6px;
-  align-items: center;
-  padding: 0 5px;
+  flex: none;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 8px;
+  padding: 2px 5px;
   border-bottom: 1px solid var(--vscode-panel-border, rgba(0, 0, 0, 0.2));
   background: var(--vscode-editor-background);
   position: sticky;
@@ -28,7 +31,24 @@ body {
   overflow: visible;
 }
 
-#filterInput {
+.filter-rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filter-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+#filterInput,
+#excludeFilterInput {
   width: 100%;
   height: var(--filter-input-height);
   border-radius: 6px;
@@ -40,8 +60,17 @@ body {
   box-sizing: border-box;
 }
 
-#filterInput:focus {
+#filterInput:focus,
+#excludeFilterInput:focus {
   border-color: var(--vscode-focusBorder);
+}
+
+#excludeFilterInput {
+  border-color: var(--vscode-inputValidation-warningBorder, rgba(200, 100, 0, 0.5));
+}
+
+#excludeFilterInput:focus {
+  border-color: var(--vscode-inputValidation-warningBorder, #c86400);
 }
 
 .filter-wrap {
@@ -174,37 +203,21 @@ body {
 }
 
 .status {
-  justify-self: end;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   color: var(--vscode-descriptionForeground);
   font-size: calc(var(--vscode-editor-font-size) * 0.8);
-  margin-left: 12px;
   white-space: nowrap;
+  flex: none;
+  padding-right: 2px;
 }
 
 .viewport {
-  height: calc(100vh - var(--toolbar-height) - 1px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   position: relative;
-}
-
-.ln-rows {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: var(--ln-width, 64px);
-  height: 100%;
-  overflow: hidden;
-  background: var(--vscode-editor-background);
-  border-right: 1px solid var(--vscode-panel-border, rgba(0, 0, 0, 0.2));
-  z-index: 1;
-  pointer-events: none;
-}
-
-.ln-rows-inner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
 }
 
 .hscroll {
@@ -212,7 +225,7 @@ body {
   top: 0;
   right: 0;
   bottom: 0;
-  left: var(--ln-width, 64px);
+  left: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-gutter: stable both-edges;
@@ -273,15 +286,19 @@ body {
 }
 
 .ln {
-  display: block;
-  height: var(--line-height);
-  line-height: var(--line-height);
+  display: inline-block;
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  width: calc(var(--ln-digits, 1) * 1ch + 12px);
   text-align: right;
-  padding-right: 12px;
+  padding: 0 6px;
+  vertical-align: top;
+  background: var(--vscode-editor-background);
+  border-right: 1px solid var(--vscode-panel-border, rgba(0, 0, 0, 0.2));
   font-size: small;
   color: var(--vscode-editorLineNumber-foreground, #888888);
   user-select: none;
-  padding-left: 8px;
 }
 
 .txt {

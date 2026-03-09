@@ -5,6 +5,8 @@ import { spawn } from 'child_process';
 
 const LOGFISH_VIEW_TYPE = 'logFish.viewer';
 const SAVED_FILTERS_KEY = 'logFish.savedFilters';
+const SAVED_EXCLUDE_FILTERS_KEY = 'logFish.savedExcludeFilters';
+const EXCLUDE_FILTER_STATE_KEY = 'logFish.excludeFilter';
 
 type HighlightRule = {
   pattern: string;
@@ -186,7 +188,9 @@ class IndexedFileModel {
 
   async buildFilteredModel(
     filterText: string,
+    excludeText: string,
     caseSensitive: boolean,
+    caseSensitiveExclude: boolean,
     backend: FilterBackend,
     onProgress?: (update: ProgressUpdate) => void
   ): Promise<FilteredModelStats> {
@@ -196,6 +200,7 @@ class IndexedFileModel {
     const totalLines = this.lineStarts.length;
     const maxLineNumber = totalLines;
     const trimmedFilter = filterText.trim();
+    const trimmedExclude = excludeText.trim();
 
     onProgress?.({
       phase: 'filtering',
@@ -205,7 +210,7 @@ class IndexedFileModel {
       detail: 'Preparing filter'
     });
 
-    if (trimmedFilter.length === 0) {
+    if (trimmedFilter.length === 0 && trimmedExclude.length === 0) {
       const allNumbers: number[] = new Array(totalLines);
       const allStarts: number[] = new Array(totalLines);
       const allEnds: number[] = new Array(totalLines);
@@ -231,11 +236,27 @@ class IndexedFileModel {
       };
     }
 
+    // --- Exclude pass ---
+    let excludedLineNumbers: Set<number> | null = null;
+    if (trimmedExclude.length > 0) {
+      excludedLineNumbers = new Set<number>();
+      const excludeSet = excludedLineNumbers;
+      const markExcluded = (lineNumber: number) => { excludeSet.add(lineNumber); };
+      if (backend === 'rg' || backend === 'grep') {
+        await this.filterWithExternalTool(excludeText, backend, caseSensitiveExclude, markExcluded, totalLines, onProgress);
+      } else {
+        await this.filterWithJs(excludeText, caseSensitiveExclude, markExcluded, totalLines, onProgress);
+      }
+    }
+
     const starts: number[] = [];
     const ends: number[] = [];
     const lineNumbers: number[] = [];
 
     const appendLine = (lineNumber: number) => {
+      if (excludedLineNumbers && excludedLineNumbers.has(lineNumber)) {
+        return;
+      }
       const idx = lineNumber - 1;
       if (idx < 0 || idx >= this.lineStarts.length) {
         return;
@@ -245,10 +266,17 @@ class IndexedFileModel {
       ends.push(this.lineEnds[idx]);
     };
 
-    if (backend === 'rg' || backend === 'grep') {
-      await this.filterWithExternalTool(filterText, backend, caseSensitive, appendLine, totalLines, onProgress);
+    if (trimmedFilter.length === 0) {
+      // No include filter: start from all lines, only exclude applies.
+      for (let i = 1; i <= totalLines; i += 1) {
+        appendLine(i);
+      }
     } else {
-      await this.filterWithJs(filterText, caseSensitive, appendLine, totalLines, onProgress);
+      if (backend === 'rg' || backend === 'grep') {
+        await this.filterWithExternalTool(filterText, backend, caseSensitive, appendLine, totalLines, onProgress);
+      } else {
+        await this.filterWithJs(filterText, caseSensitive, appendLine, totalLines, onProgress);
+      }
     }
 
     this.filteredLineNumbers = lineNumbers;
@@ -266,7 +294,7 @@ class IndexedFileModel {
     return {
       totalLines,
       matchedLines: lineNumbers.length,
-      maxLineNumber
+      maxLineNumber: lineNumbers.length > 0 ? lineNumbers[lineNumbers.length - 1] : 0
     };
   }
 
@@ -642,21 +670,23 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
 
     const model = new IndexedFileModel(document.uri);
     let currentFilter = this.readFilterState(document.uri, this.getSettings(document.uri));
+    let currentExcludeFilter = this.readExcludeFilterState(document.uri, this.getSettings(document.uri));
     let currentCaseSensitive = false;
+    let currentCaseSensitiveExclude = false;
     let modelVersion = 0;
 
-    const loadModel = async (filterText: string, caseSensitive: boolean) => {
+    const loadModel = async (filterText: string, excludeText: string, caseSensitive: boolean, caseSensitiveExclude: boolean) => {
       modelVersion += 1;
       const version = modelVersion;
       model.cancelActiveFilter();
       webview.postMessage({ type: 'reset', version });
 
       const settings = this.getSettings(document.uri);
-      const trimmed = filterText.trim();
+      const hasAnyFilter = filterText.trim().length > 0 || excludeText.trim().length > 0;
 
       try {
-        const backend = trimmed.length > 0 ? await this.getFilterBackend() : 'js';
-        const stats = await model.buildFilteredModel(filterText, caseSensitive, backend, (update) => {
+        const backend = hasAnyFilter ? await this.getFilterBackend() : 'js';
+        const stats = await model.buildFilteredModel(filterText, excludeText, caseSensitive, caseSensitiveExclude, backend, (update) => {
           if (version !== modelVersion) {
             return;
           }
@@ -683,7 +713,6 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
         webview.postMessage({ type: 'error', message });
       }
 
-      // Read setting again to pick up potential changes while filtering.
       if (settings.maxCachedLines <= 0) {
         webview.postMessage({ type: 'error', message: 'logFish.maxCachedLines must be greater than 0.' });
       }
@@ -703,20 +732,28 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
             debounceMs: settings.filterDelayMs,
             maxCachedLines: settings.maxCachedLines,
             filterText: currentFilter,
+            excludeFilterText: currentExcludeFilter,
             savedFilters: this.readSavedFilters(settings),
-            caseSensitive: currentCaseSensitive
+            savedExcludeFilters: this.readSavedExcludeFilters(settings),
+            caseSensitive: currentCaseSensitive,
+            caseSensitiveExclude: currentCaseSensitiveExclude
           });
-          await loadModel(currentFilter, currentCaseSensitive);
+          await loadModel(currentFilter, currentExcludeFilter, currentCaseSensitive, currentCaseSensitiveExclude);
           break;
         }
         case 'filterChanged': {
           currentFilter = String(message.value ?? '');
+          currentExcludeFilter = String(message.excludeValue ?? '');
           if (typeof message.caseSensitive === 'boolean') {
             currentCaseSensitive = message.caseSensitive;
           }
+          if (typeof message.caseSensitiveExclude === 'boolean') {
+            currentCaseSensitiveExclude = message.caseSensitiveExclude;
+          }
           const settings = this.getSettings(document.uri);
           this.persistFilterState(document.uri, settings, currentFilter);
-          await loadModel(currentFilter, currentCaseSensitive);
+          this.persistExcludeFilterState(document.uri, settings, currentExcludeFilter);
+          await loadModel(currentFilter, currentExcludeFilter, currentCaseSensitive, currentCaseSensitiveExclude);
           break;
         }
         case 'requestRange': {
@@ -752,16 +789,28 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
         }
         case 'saveFilter': {
           const value = String(message.value ?? '');
+          const kind = String(message.kind ?? 'include');
           const settings = this.getSettings(document.uri);
-          const filters = this.addToSavedFilters(settings, value);
-          webview.postMessage({ type: 'savedFiltersUpdated', filters });
+          if (kind === 'exclude') {
+            const filters = this.addToSavedExcludeFilters(settings, value);
+            webview.postMessage({ type: 'savedFiltersUpdated', kind: 'exclude', filters });
+          } else {
+            const filters = this.addToSavedFilters(settings, value);
+            webview.postMessage({ type: 'savedFiltersUpdated', kind: 'include', filters });
+          }
           break;
         }
         case 'deleteFilter': {
           const value = String(message.value ?? '');
+          const kind = String(message.kind ?? 'include');
           const settings = this.getSettings(document.uri);
-          const filters = this.deleteFromSavedFilters(settings, value);
-          webview.postMessage({ type: 'savedFiltersUpdated', filters });
+          if (kind === 'exclude') {
+            const filters = this.deleteFromSavedExcludeFilters(settings, value);
+            webview.postMessage({ type: 'savedFiltersUpdated', kind: 'exclude', filters });
+          } else {
+            const filters = this.deleteFromSavedFilters(settings, value);
+            webview.postMessage({ type: 'savedFiltersUpdated', kind: 'include', filters });
+          }
           break;
         }
         default:
@@ -816,6 +865,84 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
         void this.context.globalState.update(key, value);
         break;
     }
+  }
+
+  private readExcludeFilterState(uri: vscode.Uri, settings: LogFishSettings): string {
+    const key = EXCLUDE_FILTER_STATE_KEY;
+    switch (settings.filterPersistence) {
+      case 'workspace':
+        return this.context.workspaceState.get<string>(key, '');
+      case 'global':
+        return this.context.globalState.get<string>(key, '');
+      case 'workspaceThenGlobal':
+      default:
+        return this.context.workspaceState.get<string>(key) ?? this.context.globalState.get<string>(key) ?? '';
+    }
+  }
+
+  private persistExcludeFilterState(uri: vscode.Uri, settings: LogFishSettings, value: string): void {
+    const key = EXCLUDE_FILTER_STATE_KEY;
+    switch (settings.filterPersistence) {
+      case 'workspace':
+        void this.context.workspaceState.update(key, value);
+        break;
+      case 'global':
+        void this.context.globalState.update(key, value);
+        break;
+      case 'workspaceThenGlobal':
+      default:
+        void this.context.workspaceState.update(key, value);
+        void this.context.globalState.update(key, value);
+        break;
+    }
+  }
+
+  private readSavedExcludeFilters(settings: LogFishSettings): string[] {
+    switch (settings.filterPersistence) {
+      case 'workspace':
+        return this.context.workspaceState.get<string[]>(SAVED_EXCLUDE_FILTERS_KEY, []);
+      case 'global':
+        return this.context.globalState.get<string[]>(SAVED_EXCLUDE_FILTERS_KEY, []);
+      case 'workspaceThenGlobal':
+      default:
+        return (
+          this.context.workspaceState.get<string[]>(SAVED_EXCLUDE_FILTERS_KEY) ??
+          this.context.globalState.get<string[]>(SAVED_EXCLUDE_FILTERS_KEY) ??
+          []
+        );
+    }
+  }
+
+  private persistSavedExcludeFilters(settings: LogFishSettings, filters: string[]): void {
+    switch (settings.filterPersistence) {
+      case 'workspace':
+        void this.context.workspaceState.update(SAVED_EXCLUDE_FILTERS_KEY, filters);
+        break;
+      case 'global':
+        void this.context.globalState.update(SAVED_EXCLUDE_FILTERS_KEY, filters);
+        break;
+      case 'workspaceThenGlobal':
+      default:
+        void this.context.workspaceState.update(SAVED_EXCLUDE_FILTERS_KEY, filters);
+        void this.context.globalState.update(SAVED_EXCLUDE_FILTERS_KEY, filters);
+        break;
+    }
+  }
+
+  private addToSavedExcludeFilters(settings: LogFishSettings, value: string): string[] {
+    const trimmed = value.trim();
+    if (!trimmed) { return this.readSavedExcludeFilters(settings); }
+    const current = this.readSavedExcludeFilters(settings);
+    const deduped = [trimmed, ...current.filter((f) => f !== trimmed)];
+    this.persistSavedExcludeFilters(settings, deduped);
+    return deduped;
+  }
+
+  private deleteFromSavedExcludeFilters(settings: LogFishSettings, value: string): string[] {
+    const current = this.readSavedExcludeFilters(settings);
+    const updated = current.filter((f) => f !== value);
+    this.persistSavedExcludeFilters(settings, updated);
+    return updated;
   }
 
   private readSavedFilters(settings: LogFishSettings): string[] {
@@ -1023,18 +1150,27 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
 </head>
 <body>
   <div class="toolbar">
-    <div class="filter-wrap">
-      <input id="filterInput" type="text" placeholder="Filter (regex)" />
-      <button id="filterToggle" class="filter-toggle" type="button" title="Show saved filters" aria-expanded="false">&#9660;</button>
-      <div id="filterDropdown" class="filter-dropdown" hidden></div>
+    <div class="filter-rows">
+      <div class="filter-row">
+        <div class="filter-wrap">
+          <input id="filterInput" type="text" placeholder="Include filter (regex)" />
+          <button id="filterToggle" class="filter-toggle" type="button" title="Show saved filters" aria-expanded="false">&#9660;</button>
+          <div id="filterDropdown" class="filter-dropdown" hidden></div>
+        </div>
+        <button id="caseInclude" class="case" type="button" aria-pressed="false" title="Match case (include)">Aa</button>
+      </div>
+      <div class="filter-row">
+        <div class="filter-wrap">
+          <input id="excludeFilterInput" type="text" placeholder="Exclude filter (regex)" />
+          <button id="excludeFilterToggle" class="filter-toggle filter-toggle--exclude" type="button" title="Show saved exclude filters" aria-expanded="false">&#9660;</button>
+          <div id="excludeFilterDropdown" class="filter-dropdown" hidden></div>
+        </div>
+        <button id="caseExclude" class="case" type="button" aria-pressed="false" title="Match case (exclude)">Aa</button>
+      </div>
     </div>
-    <button id="case" class="case" type="button" aria-pressed="false" title="Match case">Aa</button>
     <div id="status" class="status">Ready</div>
   </div>
   <div id="viewport" class="viewport">
-    <div id="lnRows" class="ln-rows">
-      <div id="lnRowsInner" class="ln-rows-inner"></div>
-    </div>
     <div id="hscroll" class="hscroll">
       <div id="rows" class="rows"></div>
     </div>

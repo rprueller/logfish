@@ -5,15 +5,18 @@
   const statusEl = document.getElementById('status');
   const viewport = document.getElementById('viewport');
   const hscroll = document.getElementById('hscroll');
-  const lnRowsInner = document.getElementById('lnRowsInner');
   const rows = document.getElementById('rows');
   const scrollbar = document.getElementById('scrollbar');
   const scrollbarThumb = document.getElementById('scrollbarThumb');
   const dynamicStyleEl = document.getElementById('dynamicStyles');
   const layoutStyleEl = document.getElementById('layoutStyles');
-  const caseButton = document.getElementById('case');
+  const caseButton = document.getElementById('caseInclude');
+  const caseExcludeButton = document.getElementById('caseExclude');
   const filterDropdown = document.getElementById('filterDropdown');
   const filterToggle = document.getElementById('filterToggle');
+  const excludeFilterInput = document.getElementById('excludeFilterInput');
+  const excludeFilterDropdown = document.getElementById('excludeFilterDropdown');
+  const excludeFilterToggle = document.getElementById('excludeFilterToggle');
 
   const OVERSCAN_ROWS = 20;
   const FETCH_CHUNK_SIZE = 300;
@@ -23,6 +26,7 @@
     rules: [],
     debounceMs: 250,
     caseSensitive: false,
+    caseSensitiveExclude: false,
     maxCachedLines: 20000,
     version: 0,
     totalLines: 0,
@@ -30,7 +34,8 @@
     maxLineNumber: 0,
     cache: new Map(),
     pendingRanges: new Set(),
-    savedFilters: []
+    savedFilters: [],
+    savedExcludeFilters: []
   };
 
   let renderScheduled = false;
@@ -41,7 +46,6 @@
   let dragStartScrollTop = 0;
   let rememberedLine = null;
   let pendingScrollToRemembered = false;
-  let dropdownOpen = false;
 
   const escapeHtml = (value) =>
     value
@@ -63,15 +67,23 @@
   };
 
   const updateCaseUi = () => {
-    if (!caseButton) {
-      return;
+    if (caseButton) {
+      caseButton.classList.toggle('is-active', state.caseSensitive);
+      caseButton.setAttribute('aria-pressed', String(state.caseSensitive));
     }
-    caseButton.classList.toggle('is-active', state.caseSensitive);
-    caseButton.setAttribute('aria-pressed', String(state.caseSensitive));
+    if (caseExcludeButton) {
+      caseExcludeButton.classList.toggle('is-active', state.caseSensitiveExclude);
+      caseExcludeButton.setAttribute('aria-pressed', String(state.caseSensitiveExclude));
+    }
   };
 
   const setCaseSensitive = (value) => {
     state.caseSensitive = value;
+    updateCaseUi();
+  };
+
+  const setCaseSensitiveExclude = (value) => {
+    state.caseSensitiveExclude = value;
     updateCaseUi();
   };
 
@@ -101,65 +113,154 @@
     }
   };
 
-  const renderDropdown = () => {
-    if (!filterDropdown) { return; }
-    const html = [];
-    for (const filter of state.savedFilters) {
-      const esc = escapeHtml(filter);
+  // ---------------------------------------------------------------------------
+  // Generic filter-widget factory
+  // kind: 'include' | 'exclude'
+  // ---------------------------------------------------------------------------
+  const makeFilterWidget = (inputEl, toggleEl, dropdownEl, kind) => {
+    let open = false;
+
+    const getSavedFilters = () =>
+      kind === 'exclude' ? state.savedExcludeFilters : state.savedFilters;
+
+    const renderDropdown = () => {
+      if (!dropdownEl) { return; }
+      const html = [];
+      for (const filter of getSavedFilters()) {
+        const esc = escapeHtml(filter);
+        html.push(
+          `<div class="filter-dropdown-item" data-value="${esc}">` +
+          `<span class="filter-dropdown-text">${esc}</span>` +
+          `<button class="filter-dropdown-delete" data-action="delete" data-value="${esc}" title="Delete">\u00d7</button>` +
+          `</div>`
+        );
+      }
+      const saveDisabled = inputEl && inputEl.value.trim() ? '' : ' disabled';
       html.push(
-        `<div class="filter-dropdown-item" data-value="${esc}">` +
-        `<span class="filter-dropdown-text">${esc}</span>` +
-        `<button class="filter-dropdown-delete" data-action="delete" data-value="${esc}" title="Delete">\u00d7</button>` +
+        `<div class="filter-dropdown-item filter-dropdown-save-row">` +
+        `<span class="filter-dropdown-text filter-dropdown-save-label"></span>` +
+        `<button class="filter-dropdown-save" data-action="save" title="Save current filter"${saveDisabled}>+</button>` +
         `</div>`
       );
+      dropdownEl.innerHTML = html.join('');
+    };
+
+    const openDropdown = () => {
+      if (!dropdownEl || open) { return; }
+      open = true;
+      renderDropdown();
+      dropdownEl.removeAttribute('hidden');
+      if (toggleEl) {
+        toggleEl.innerHTML = '&#9650;';
+        toggleEl.setAttribute('aria-expanded', 'true');
+        toggleEl.title = 'Hide saved filters';
+      }
+    };
+
+    const closeDropdown = () => {
+      if (!dropdownEl || !open) { return; }
+      open = false;
+      dropdownEl.setAttribute('hidden', '');
+      if (toggleEl) {
+        toggleEl.innerHTML = '&#9660;';
+        toggleEl.setAttribute('aria-expanded', 'false');
+        toggleEl.title = 'Show saved filters';
+      }
+    };
+
+    const isOpen = () => open;
+
+    if (inputEl) {
+      inputEl.addEventListener('input', () => {
+        if (debounceTimer) { clearTimeout(debounceTimer); }
+        setStatus('Filtering...');
+        if (open) { renderDropdown(); }
+        debounceTimer = setTimeout(postFilterChanged, state.debounceMs);
+      });
+
+      inputEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && open) {
+          closeDropdown();
+          event.preventDefault();
+        } else if (event.key === 'Enter' && open) {
+          if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+          postFilterChanged();
+          closeDropdown();
+          event.preventDefault();
+        }
+      });
     }
-    const saveDisabled = filterInput && filterInput.value.trim() ? '' : ' disabled';
-    html.push(
-      `<div class="filter-dropdown-item filter-dropdown-save-row">` +
-      `<span class="filter-dropdown-text filter-dropdown-save-label"></span>` +
-      `<button class="filter-dropdown-save" data-action="save" title="Save current filter"${saveDisabled}>+</button>` +
-      `</div>`
-    );
-    filterDropdown.innerHTML = html.join('');
+
+    if (toggleEl) {
+      toggleEl.addEventListener('click', () => {
+        if (open) { closeDropdown(); } else { openDropdown(); }
+      });
+    }
+
+    document.addEventListener('pointerdown', (event) => {
+      if (!open) { return; }
+      const target = event.target;
+      if (!(target instanceof Element)) { return; }
+      const wrap = toggleEl ? toggleEl.closest('.filter-wrap') : null;
+      if (wrap && wrap.contains(target)) { return; }
+      closeDropdown();
+    });
+
+    if (dropdownEl) {
+      dropdownEl.addEventListener('mousedown', (event) => { event.preventDefault(); });
+
+      dropdownEl.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) { return; }
+
+        const deleteBtn = target.closest('[data-action="delete"]');
+        if (deleteBtn) {
+          vscode.postMessage({ type: 'deleteFilter', kind, value: deleteBtn.dataset.value ?? '' });
+          return;
+        }
+
+        if (target.closest('[data-action="save"]')) {
+          const val = inputEl ? inputEl.value : '';
+          if (val.trim()) {
+            vscode.postMessage({ type: 'saveFilter', kind, value: val });
+          }
+          return;
+        }
+
+        const item = target.closest('.filter-dropdown-item[data-value]');
+        if (item) {
+          const val = item.dataset.value ?? '';
+          if (inputEl) {
+            inputEl.value = val;
+            if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+            postFilterChanged();
+          }
+          vscode.postMessage({ type: 'saveFilter', kind, value: val });
+          closeDropdown();
+        }
+      });
+    }
+
+    return { openDropdown, closeDropdown, isOpen, renderDropdown };
   };
 
-  const openDropdown = () => {
-    if (!filterDropdown || dropdownOpen) { return; }
-    dropdownOpen = true;
-    renderDropdown();
-    filterDropdown.removeAttribute('hidden');
-    if (filterToggle) {
-      filterToggle.innerHTML = '&#9650;';
-      filterToggle.setAttribute('aria-expanded', 'true');
-      filterToggle.title = 'Hide saved filters';
-    }
-  };
-
-  const closeDropdown = () => {
-    if (!filterDropdown || !dropdownOpen) { return; }
-    dropdownOpen = false;
-    filterDropdown.setAttribute('hidden', '');
-    if (filterToggle) {
-      filterToggle.innerHTML = '&#9660;';
-      filterToggle.setAttribute('aria-expanded', 'false');
-      filterToggle.title = 'Show saved filters';
-    }
-  };
-
+  // Post the current state of both filters to the extension host.
   const postFilterChanged = () => {
-    if (!filterInput) {
-      return;
-    }
     if (!Number.isFinite(rememberedLine)) {
       rememberCenterLine();
     }
     pendingScrollToRemembered = Number.isFinite(rememberedLine);
     vscode.postMessage({
       type: 'filterChanged',
-      value: filterInput.value,
-      caseSensitive: state.caseSensitive
+      value: filterInput ? filterInput.value : '',
+      excludeValue: excludeFilterInput ? excludeFilterInput.value : '',
+      caseSensitive: state.caseSensitive,
+      caseSensitiveExclude: state.caseSensitiveExclude
     });
   };
+
+  const includeWidget = makeFilterWidget(filterInput, filterToggle, filterDropdown, 'include');
+  const excludeWidget = makeFilterWidget(excludeFilterInput, excludeFilterToggle, excludeFilterDropdown, 'exclude');
 
   const compileRules = (rules) => {
     const compiled = [];
@@ -195,17 +296,12 @@
 
   const renderTextRow = (index, line) => {
     if (!line) {
-      return `<div class="row row-placeholder" data-index="${index}"><span class="txt"></span></div>`;
+      return `<div class="row row-placeholder" data-index="${index}"><span class="ln"></span><span class="txt"></span></div>`;
     }
     const ruleIndex = checkRules(line.t);
     const className = ruleIndex >= 0 ? state.rules[ruleIndex].className : '';
     const classes = className ? `row ${className}` : 'row';
-    return `<div class="${classes}" data-line="${line.n}" data-index="${index}"><span class="txt">${escapeHtml(line.t)}</span></div>`;
-  };
-
-  const renderNumberRow = (index, line) => {
-    const text = line ? String(line.n) : '';
-    return `<div class="row" data-index="${index}"><span class="ln">${text}</span></div>`;
+    return `<div class="${classes}" data-line="${line.n}" data-index="${index}"><span class="ln">${line.n}</span><span class="txt">${escapeHtml(line.t)}</span></div>`;
   };
 
   const getLineHeight = () => {
@@ -433,7 +529,7 @@
 
     if (layoutStyleEl) {
       const offset = start * lineHeight - virtualScrollTop;
-      layoutStyleEl.textContent = `#rows { top: ${offset}px; }\n#lnRowsInner { top: ${offset}px; }`;
+      layoutStyleEl.textContent = `#rows { top: ${offset}px; }`;
     }
 
     const prefetchStart = Math.max(0, start - PREFETCH_PADDING);
@@ -442,24 +538,16 @@
 
     const maxDigits = Math.max(1, String(Math.max(state.maxLineNumber, 1)).length);
     const textHtml = [];
-    const numberHtml = lnRowsInner ? [] : null;
 
     for (let i = start; i < end; i += 1) {
-      const line = getCachedLine(i);
-      textHtml.push(renderTextRow(i, line));
-      if (numberHtml) {
-        numberHtml.push(renderNumberRow(i, line));
-      }
+      textHtml.push(renderTextRow(i, getCachedLine(i)));
     }
 
     if (viewport) {
-      viewport.style.setProperty('--ln-width', `calc(${maxDigits}ch + 20px)`);
+      viewport.style.setProperty('--ln-digits', String(maxDigits));
     }
 
     rows.innerHTML = textHtml.join('');
-    if (lnRowsInner && numberHtml) {
-      lnRowsInner.innerHTML = numberHtml.join('');
-    }
 
     updateScrollbar();
   };
@@ -606,17 +694,6 @@
     });
   }
 
-  filterInput.addEventListener('input', () => {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-    setStatus('Filtering...');
-    if (dropdownOpen) { renderDropdown(); }
-    debounceTimer = setTimeout(() => {
-      postFilterChanged();
-    }, state.debounceMs);
-  });
-
   if (caseButton) {
     caseButton.addEventListener('click', () => {
       setCaseSensitive(!state.caseSensitive);
@@ -629,80 +706,15 @@
     });
   }
 
-  if (filterInput) {
-    filterInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && dropdownOpen) {
-        closeDropdown();
-        event.preventDefault();
-      } else if (event.key === 'Enter' && dropdownOpen) {
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
-        }
-        postFilterChanged();
-        closeDropdown();
-        event.preventDefault();
+  if (caseExcludeButton) {
+    caseExcludeButton.addEventListener('click', () => {
+      setCaseSensitiveExclude(!state.caseSensitiveExclude);
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
       }
-    });
-  }
-
-  if (filterToggle) {
-    filterToggle.addEventListener('click', () => {
-      if (dropdownOpen) {
-        closeDropdown();
-      } else {
-        openDropdown();
-      }
-    });
-  }
-
-  document.addEventListener('pointerdown', (event) => {
-    if (!dropdownOpen) { return; }
-    const target = event.target;
-    if (!(target instanceof Element)) { return; }
-    const filterWrap = filterToggle ? filterToggle.closest('.filter-wrap') : null;
-    if (filterWrap && filterWrap.contains(target)) { return; }
-    closeDropdown();
-  });
-
-  if (filterDropdown) {
-    filterDropdown.addEventListener('mousedown', (event) => {
-      // Keep focus on the input while interacting with the dropdown.
-      event.preventDefault();
-    });
-
-    filterDropdown.addEventListener('click', (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) { return; }
-
-      const deleteBtn = target.closest('[data-action="delete"]');
-      if (deleteBtn) {
-        vscode.postMessage({ type: 'deleteFilter', value: deleteBtn.dataset.value ?? '' });
-        return;
-      }
-
-      if (target.closest('[data-action="save"]')) {
-        const val = filterInput ? filterInput.value : '';
-        if (val.trim()) {
-          vscode.postMessage({ type: 'saveFilter', value: val });
-        }
-        return;
-      }
-
-      const item = target.closest('.filter-dropdown-item[data-value]');
-      if (item) {
-        const val = item.dataset.value ?? '';
-        if (filterInput) {
-          filterInput.value = val;
-          if (debounceTimer) {
-            clearTimeout(debounceTimer);
-            debounceTimer = null;
-          }
-          postFilterChanged();
-        }
-        vscode.postMessage({ type: 'saveFilter', value: val });
-        closeDropdown();
-      }
+      setStatus('Filtering...');
+      postFilterChanged();
     });
   }
 
@@ -716,15 +728,21 @@
         if (filterInput && typeof message.filterText === 'string') {
           filterInput.value = message.filterText;
         }
-        if (typeof message.caseSensitive === 'boolean') {
-          setCaseSensitive(message.caseSensitive);
-        } else {
-          updateCaseUi();
+        if (excludeFilterInput && typeof message.excludeFilterText === 'string') {
+          excludeFilterInput.value = message.excludeFilterText;
         }
+        if (typeof message.caseSensitive === 'boolean') {
+          state.caseSensitive = message.caseSensitive;
+        }
+        if (typeof message.caseSensitiveExclude === 'boolean') {
+          state.caseSensitiveExclude = message.caseSensitiveExclude;
+        }
+        updateCaseUi();
         if (dynamicStyleEl) {
           dynamicStyleEl.textContent = message.cssText || '';
         }
         state.savedFilters = Array.isArray(message.savedFilters) ? message.savedFilters : [];
+        state.savedExcludeFilters = Array.isArray(message.savedExcludeFilters) ? message.savedExcludeFilters : [];
         setStatus('Loading...');
         virtualScrollTop = 0;
         updateScrollbar();
@@ -838,9 +856,12 @@
         break;
       }
       case 'savedFiltersUpdated': {
-        state.savedFilters = Array.isArray(message.filters) ? message.filters : [];
-        if (dropdownOpen) {
-          renderDropdown();
+        if (message.kind === 'exclude') {
+          state.savedExcludeFilters = Array.isArray(message.filters) ? message.filters : [];
+          if (excludeWidget.isOpen()) { excludeWidget.renderDropdown(); }
+        } else {
+          state.savedFilters = Array.isArray(message.filters) ? message.filters : [];
+          if (includeWidget.isOpen()) { includeWidget.renderDropdown(); }
         }
         break;
       }
