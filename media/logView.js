@@ -28,14 +28,14 @@
 
   const OVERSCAN_ROWS = 20;
   const FETCH_CHUNK_SIZE = 300;
-  const PREFETCH_PADDING = 250;
+  const PREFETCH_PADDING = 500;
 
   const state = {
     rules: [],
     debounceMs: 250,
     caseSensitive: false,
     caseSensitiveExclude: false,
-    maxCachedLines: 20000,
+    maxCachedLines: 100000,
     version: 0,
     totalLines: 0,
     matchedLines: 0,
@@ -56,6 +56,12 @@
   let dragStartScrollTop = 0;
   let rememberedLine = null;
   let pendingScrollToRemembered = false;
+  let rangeSerial = 0;
+
+  const bumpSerial = () => {
+    rangeSerial += 1;
+    state.pendingRanges.clear();
+  };
 
   const search = {
     visible: false,
@@ -515,7 +521,8 @@
       type: 'requestRange',
       start: safeStart,
       count: safeCount,
-      version: state.version
+      version: state.version,
+      serial: rangeSerial
     });
   };
 
@@ -675,15 +682,19 @@
         setVirtualScrollTop(virtualScrollTop + lineHeight);
         break;
       case 'PageUp':
+        bumpSerial();
         setVirtualScrollTop(virtualScrollTop - pageDelta);
         break;
       case 'PageDown':
+        bumpSerial();
         setVirtualScrollTop(virtualScrollTop + pageDelta);
         break;
       case 'Home':
+        bumpSerial();
         setVirtualScrollTop(0);
         break;
       case 'End':
+        bumpSerial();
         setVirtualScrollTop(getMaxScrollTop());
         break;
       default:
@@ -726,6 +737,7 @@
       const deltaY = event.clientY - dragStartY;
       const maxScrollTop = getMaxScrollTop();
       const scrollDelta = (deltaY / maxThumbTop) * maxScrollTop;
+      bumpSerial();
       setVirtualScrollTop(dragStartScrollTop + scrollDelta);
       rememberCenterLine();
       event.preventDefault();
@@ -757,6 +769,7 @@
       const thumbTop = clamp(clickY - thumbHeight / 2, 0, maxThumbTop);
       const maxScrollTop = getMaxScrollTop();
       const ratio = maxThumbTop > 0 ? thumbTop / maxThumbTop : 0;
+      bumpSerial();
       setVirtualScrollTop(ratio * maxScrollTop);
       rememberCenterLine();
       event.preventDefault();
@@ -832,6 +845,7 @@
       case 'reset': {
         state.version = Number.parseInt(String(message.version ?? `${state.version + 1}`), 10);
         clearCache();
+        rangeSerial = 0;
         state.totalLines = 0;
         state.matchedLines = 0;
         state.maxLineNumber = 0;

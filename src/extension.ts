@@ -825,6 +825,7 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     let currentCaseSensitive = false;
     let currentCaseSensitiveExclude = false;
     let modelVersion = 0;
+    let latestRangeSerial = 0;
 
     const loadModel = async (filterText: string, excludeText: string, caseSensitive: boolean, caseSensitiveExclude: boolean) => {
       modelVersion += 1;
@@ -911,11 +912,13 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
           const start = Number.parseInt(String(message.start ?? '0'), 10);
           const count = Number.parseInt(String(message.count ?? '0'), 10);
           const version = Number.parseInt(String(message.version ?? '-1'), 10);
+          const serial = Number.parseInt(String(message.serial ?? '0'), 10);
+          latestRangeSerial = Math.max(latestRangeSerial, serial);
           if (version !== modelVersion) {
             return;
           }
           const lines = await model.getFilteredSlice(start, count);
-          if (version !== modelVersion) {
+          if (version !== modelVersion || serial < latestRangeSerial) {
             return;
           }
           webview.postMessage({ type: 'rangeData', version, start, count, lines });
@@ -1243,11 +1246,9 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
       const styleParts: string[] = [];
       if (rule.color) {
         styleParts.push(`--row-fg:${rule.color}`);
-        styleParts.push(`color:${rule.color}`);
       }
       if (rule.background) {
         styleParts.push(`--row-bg:${rule.background}`);
-        styleParts.push(`background:${rule.background}`);
       }
       if (rule.fontStyle) {
         styleParts.push(`font-style:${rule.fontStyle}`);

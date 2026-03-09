@@ -280,6 +280,8 @@ body {
   line-height: var(--line-height);
   white-space: pre;
   min-width: max-content;
+  color: var(--row-fg, var(--vscode-editor-foreground));
+  background: var(--row-bg, var(--vscode-editor-background));
 }
 
 .row-placeholder {
