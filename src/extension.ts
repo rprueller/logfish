@@ -1242,9 +1242,11 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
 
       const styleParts: string[] = [];
       if (rule.color) {
+        styleParts.push(`--row-fg:${rule.color}`);
         styleParts.push(`color:${rule.color}`);
       }
       if (rule.background) {
+        styleParts.push(`--row-bg:${rule.background}`);
         styleParts.push(`background:${rule.background}`);
       }
       if (rule.fontStyle) {
@@ -1352,7 +1354,11 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
         <button id="caseExclude" class="case" type="button" aria-pressed="false" title="Match case (exclude)">Aa</button>
       </div>
     </div>
-    <div id="status" class="status">Ready</div>
+    <div id="status" class="status">
+      <span id="statusTotal"></span>
+      <span id="statusFiltered"></span>
+      <span id="statusOp">Loading…</span>
+    </div>
   </div>
   <div id="viewport" class="viewport">
     <div id="hscroll" class="hscroll">

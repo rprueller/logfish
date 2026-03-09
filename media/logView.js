@@ -2,7 +2,9 @@
   const vscode = acquireVsCodeApi();
 
   const filterInput = document.getElementById('filterInput');
-  const statusEl = document.getElementById('status');
+  const statusTotalEl = document.getElementById('statusTotal');
+  const statusFilteredEl = document.getElementById('statusFiltered');
+  const statusOpEl = document.getElementById('statusOp');
   const viewport = document.getElementById('viewport');
   const hscroll = document.getElementById('hscroll');
   const rows = document.getElementById('rows');
@@ -41,7 +43,9 @@
     cache: new Map(),
     pendingRanges: new Set(),
     savedFilters: [],
-    savedExcludeFilters: []
+    savedExcludeFilters: [],
+    totalFileLines: 0,
+    backendLabel: ''
   };
 
   let renderScheduled = false;
@@ -71,7 +75,20 @@
       .replace(/'/g, '&#39;');
 
   const setStatus = (message) => {
-    statusEl.textContent = message;
+    if (statusOpEl) { statusOpEl.textContent = message; }
+  };
+
+  const updateStatusCounts = () => {
+    if (statusTotalEl) {
+      statusTotalEl.textContent = state.totalFileLines > 0
+        ? `${formatNumber(state.totalFileLines)} total`
+        : '…';
+    }
+    if (statusFilteredEl) {
+      statusFilteredEl.textContent = state.totalFileLines > 0
+        ? `${formatNumber(state.matchedLines)} matched`
+        : '…';
+    }
   };
 
   const formatNumber = (value) => {
@@ -804,7 +821,9 @@
         }
         state.savedFilters = Array.isArray(message.savedFilters) ? message.savedFilters : [];
         state.savedExcludeFilters = Array.isArray(message.savedExcludeFilters) ? message.savedExcludeFilters : [];
-        setStatus('Loading...');
+        setStatus('Loading…');
+        if (statusTotalEl) { statusTotalEl.textContent = '…'; }
+        if (statusFilteredEl) { statusFilteredEl.textContent = '…'; }
         virtualScrollTop = 0;
         updateScrollbar();
         scheduleRender();
@@ -819,7 +838,7 @@
         virtualScrollTop = 0;
         search.match = null;
         scheduleRender();
-        setStatus('Loading...');
+        setStatus('Loading…');
         break;
       }
       case 'modelReady': {
@@ -831,6 +850,7 @@
         state.totalLines = Number.parseInt(String(stats.matchedLines || 0), 10);
         state.matchedLines = state.totalLines;
         state.maxLineNumber = Number.parseInt(String(stats.maxLineNumber || stats.totalLines || 0), 10);
+        state.totalFileLines = Number.parseInt(String(stats.totalLines || 0), 10);
 
         if (pendingScrollToRemembered) {
           requestClosestIndex();
@@ -839,7 +859,8 @@
           scheduleRender();
         }
 
-        setStatus(`${state.matchedLines} lines`);
+        updateStatusCounts();
+        setStatus(state.backendLabel || '—');
         updateScrollbar();
         scheduleRender();
         break;
@@ -860,19 +881,24 @@
         if (phase === 'indexing') {
           if (Number.isFinite(total) && total > 0) {
             const pct = Math.min(100, Math.floor((processed / total) * 100));
-            setStatus(`Indexing ${pct}% (${formatNumber(processed)}/${formatNumber(total)} bytes)`);
+            setStatus(`Indexing ${pct}%`);
           } else {
-            setStatus(detail || 'Indexing...');
+            setStatus('Indexing…');
           }
           break;
         }
 
         if (phase === 'filtering') {
+          const backendMatch = detail ? /\b(rg|grep|JS)\b/.exec(detail) : null;
+          if (backendMatch) {
+            state.backendLabel = backendMatch[1] === 'JS' ? 'js' : backendMatch[1];
+          }
+          if (statusFilteredEl) { statusFilteredEl.textContent = `${formatNumber(matched)}\u00a0matched`; }
           if (Number.isFinite(total) && total > 0 && processed > 0) {
             const pct = Math.min(100, Math.floor((processed / total) * 100));
-            setStatus(`Filtering ${pct}% (${formatNumber(matched)} matches)`);
+            setStatus(`${state.backendLabel || 'js'} ${pct}%`);
           } else {
-            setStatus(detail ? `${detail} (${formatNumber(matched)} matches)` : `Filtering... (${formatNumber(matched)} matches)`);
+            setStatus(`${state.backendLabel || 'js'}…`);
           }
         }
         break;
