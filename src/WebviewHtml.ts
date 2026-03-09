@@ -1,0 +1,73 @@
+import * as vscode from 'vscode';
+
+function getNonce(): string {
+  let text = '';
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i += 1) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
+}
+
+export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logView.js'));
+  const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logView.css'));
+
+  const nonce = getNonce();
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';" />
+  <link href="${styleUri}" rel="stylesheet" />
+  <style nonce="${nonce}" id="dynamicStyles"></style>
+  <style nonce="${nonce}" id="layoutStyles"></style>
+  <title>LogFish</title>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="filter-rows">
+      <div class="filter-row">
+        <div class="filter-wrap">
+          <input id="filterInput" type="text" placeholder="Include filter (regex)" />
+          <button id="filterToggle" class="filter-toggle" type="button" title="Show saved filters" aria-expanded="false">&#9660;</button>
+          <div id="filterDropdown" class="filter-dropdown" hidden></div>
+        </div>
+        <button id="caseInclude" class="case" type="button" aria-pressed="false" title="Match case (include)">Aa</button>
+      </div>
+      <div class="filter-row">
+        <div class="filter-wrap">
+          <input id="excludeFilterInput" type="text" placeholder="Exclude filter (regex)" />
+          <button id="excludeFilterToggle" class="filter-toggle filter-toggle--exclude" type="button" title="Show saved exclude filters" aria-expanded="false">&#9660;</button>
+          <div id="excludeFilterDropdown" class="filter-dropdown" hidden></div>
+        </div>
+        <button id="caseExclude" class="case" type="button" aria-pressed="false" title="Match case (exclude)">Aa</button>
+      </div>
+    </div>
+    <div id="status" class="status">
+      <span id="statusTotal"></span>
+      <span id="statusFiltered"></span>
+      <span id="statusOp">Loading…</span>
+    </div>
+  </div>
+  <div id="viewport" class="viewport">
+    <div id="hscroll" class="hscroll">
+      <div id="rows" class="rows"></div>
+    </div>
+    <div id="scrollbar" class="scrollbar">
+      <div id="scrollbarThumb" class="scrollbar-thumb"></div>
+    </div>
+    <div id="searchBox" class="search-box" hidden>
+      <input id="searchInput" type="text" placeholder="Find..." autocomplete="off" spellcheck="false" />
+      <span id="searchStatus" class="search-status"></span>
+      <button id="searchPrevBtn" class="search-nav" type="button" title="Previous match (Shift+Enter)">&#8593;</button>
+      <button id="searchNextBtn" class="search-nav" type="button" title="Next match (Enter)">&#8595;</button>
+      <button id="searchCloseBtn" class="search-close" type="button" title="Close (Escape)">&#215;</button>
+    </div>
+  </div>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+}
