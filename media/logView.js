@@ -585,12 +585,18 @@
     const prefetchEnd = Math.min(total, end + PREFETCH_PADDING);
     ensureRangeLoaded(prefetchStart, prefetchEnd);
 
-    const maxDigits = Math.max(1, String(Math.max(state.maxLineNumber, 1)).length);
     const textHtml = [];
+    let visibleMaxLineNumber = 0;
 
     for (let i = start; i < end; i += 1) {
-      textHtml.push(renderTextRow(i, getCachedLine(i)));
+      const line = getCachedLine(i);
+      if (line && line.n > visibleMaxLineNumber) { visibleMaxLineNumber = line.n; }
+      textHtml.push(renderTextRow(i, line));
     }
+
+    const maxDigits = visibleMaxLineNumber > 0
+      ? Math.max(1, String(visibleMaxLineNumber).length)
+      : Math.max(1, String(Math.max(state.maxLineNumber, 1)).length);
 
     if (viewport) {
       viewport.style.setProperty('--ln-digits', String(maxDigits));
