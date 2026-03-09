@@ -636,6 +636,157 @@ class IndexedFileModel {
     const hiDiff = Math.abs(this.filteredLineNumbers[hi] - lineNumber);
     return loDiff < hiDiff ? lo : hi;
   }
+
+  async searchFilteredLines(
+    query: string,
+    caseSensitive: boolean,
+    fromFilteredIndex: number,
+    fromMatchStart: number,
+    fromMatchLength: number,
+    direction: 'next' | 'prev'
+  ): Promise<{ filteredIndex: number; matchStart: number; matchLength: number } | null> {
+    await this.ensureIndexed();
+    const total = this.filteredLineNumbers.length;
+    if (total === 0 || !query) {
+      return null;
+    }
+
+    const needle = caseSensitive ? query : query.toLowerCase();
+
+    const handle = await fs.promises.open(this.uri.fsPath, 'r');
+    try {
+      type Segment = { startIndex: number; endIndex: number; byteStart: number; byteEnd: number };
+
+      const readLine = async (fi: number): Promise<string> => {
+        const len = Math.max(0, this.filteredEnds[fi] - this.filteredStarts[fi]);
+        if (len === 0) { return ''; }
+        const buf = Buffer.allocUnsafe(len);
+        await handle.read(buf, 0, len, this.filteredStarts[fi]);
+        return buf.toString('utf8');
+      };
+
+      const searchRange = async (
+        rangeStart: number,
+        rangeEnd: number,
+        reverse: boolean
+      ): Promise<{ filteredIndex: number; matchStart: number; matchLength: number } | null> => {
+        if (rangeStart >= rangeEnd) {
+          return null;
+        }
+
+        const mergeGapBytes = 256;
+        const maxMergedBytes = 512 * 1024;
+        const segments: Segment[] = [];
+
+        let segStart = rangeStart;
+        let segEnd = rangeStart;
+        let segByteStart = this.filteredStarts[rangeStart];
+        let segByteEnd = this.filteredEnds[rangeStart];
+
+        for (let i = rangeStart + 1; i < rangeEnd; i++) {
+          const nextStart = this.filteredStarts[i];
+          const nextEnd = this.filteredEnds[i];
+          const gap = Math.max(0, nextStart - segByteEnd);
+          const mergedBytes = nextEnd - segByteStart;
+          if (gap <= mergeGapBytes && mergedBytes <= maxMergedBytes) {
+            segEnd = i;
+            if (nextEnd > segByteEnd) {
+              segByteEnd = nextEnd;
+            }
+          } else {
+            segments.push({ startIndex: segStart, endIndex: segEnd, byteStart: segByteStart, byteEnd: segByteEnd });
+            segStart = i;
+            segEnd = i;
+            segByteStart = nextStart;
+            segByteEnd = nextEnd;
+          }
+        }
+        segments.push({ startIndex: segStart, endIndex: segEnd, byteStart: segByteStart, byteEnd: segByteEnd });
+
+        if (reverse) {
+          segments.reverse();
+        }
+
+        for (const seg of segments) {
+          const segLen = Math.max(0, seg.byteEnd - seg.byteStart);
+          const buf = segLen > 0 ? Buffer.allocUnsafe(segLen) : Buffer.alloc(0);
+          if (segLen > 0) {
+            await handle.read(buf, 0, segLen, seg.byteStart);
+          }
+
+          const indices: number[] = [];
+          for (let fi = seg.startIndex; fi <= seg.endIndex; fi++) {
+            indices.push(fi);
+          }
+          if (reverse) {
+            indices.reverse();
+          }
+
+          for (const fi of indices) {
+            const lineByteStart = this.filteredStarts[fi] - seg.byteStart;
+            const lineByteEnd = this.filteredEnds[fi] - seg.byteStart;
+            const start = Math.max(0, lineByteStart);
+            const end = Math.max(start, lineByteEnd);
+            const text = buf.toString('utf8', start, end);
+            const haystack = caseSensitive ? text : text.toLowerCase();
+            if (reverse) {
+              const pos = haystack.lastIndexOf(needle);
+              if (pos >= 0) {
+                return { filteredIndex: fi, matchStart: pos, matchLength: query.length };
+              }
+            } else {
+              const pos = haystack.indexOf(needle);
+              if (pos >= 0) {
+                return { filteredIndex: fi, matchStart: pos, matchLength: query.length };
+              }
+            }
+          }
+        }
+        return null;
+      };
+
+      if (direction === 'next') {
+        // Check same line first: look for a match after fromMatchStart + fromMatchLength
+        if (fromFilteredIndex >= 0 && fromFilteredIndex < total && fromMatchStart >= 0) {
+          const text = await readLine(fromFilteredIndex);
+          const haystack = caseSensitive ? text : text.toLowerCase();
+          const searchFrom = fromMatchStart + Math.max(1, fromMatchLength);
+          const pos = haystack.indexOf(needle, searchFrom);
+          if (pos >= 0) {
+            return { filteredIndex: fromFilteredIndex, matchStart: pos, matchLength: query.length };
+          }
+        }
+        // Continue from the next line
+        const nextLine = fromFilteredIndex >= 0 ? fromFilteredIndex + 1 : 0;
+        const startAt = nextLine >= total ? 0 : nextLine;
+        let result = await searchRange(startAt, total, false);
+        if (!result && startAt > 0) {
+          result = await searchRange(0, startAt, false);
+        }
+        return result;
+      } else {
+        // Check same line first: look for a match before fromMatchStart
+        if (fromFilteredIndex >= 0 && fromFilteredIndex < total && fromMatchStart > 0) {
+          const text = await readLine(fromFilteredIndex);
+          const haystack = caseSensitive ? text : text.toLowerCase();
+          const pos = haystack.lastIndexOf(needle, fromMatchStart - 1);
+          if (pos >= 0) {
+            return { filteredIndex: fromFilteredIndex, matchStart: pos, matchLength: query.length };
+          }
+        }
+        // Continue from the previous line
+        const prevLine = fromFilteredIndex > 0 ? fromFilteredIndex - 1 : total - 1;
+        const startAt = prevLine;
+        let result = await searchRange(0, startAt + 1, true);
+        if (!result) {
+          result = await searchRange(startAt + 1, total, true);
+        }
+        return result;
+      }
+    } finally {
+      await handle.close();
+    }
+  }
 }
 
 class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocument> {
@@ -810,6 +961,39 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
           } else {
             const filters = this.deleteFromSavedFilters(settings, value);
             webview.postMessage({ type: 'savedFiltersUpdated', kind: 'include', filters });
+          }
+          break;
+        }
+        case 'searchNext': {
+          const query = String(message.query ?? '');
+          const caseSensitive = Boolean(message.caseSensitive);
+          const fromIndex = Number.parseInt(String(message.fromIndex ?? '-1'), 10);
+          const fromMatchStart = Number.parseInt(String(message.fromMatchStart ?? '-1'), 10);
+          const fromMatchLength = Number.parseInt(String(message.fromMatchLength ?? '0'), 10);
+          const direction = message.direction === 'prev' ? 'prev' : 'next';
+          const version = Number.parseInt(String(message.version ?? '-1'), 10);
+          if (version !== modelVersion || !query) {
+            return;
+          }
+          try {
+            const result = await model.searchFilteredLines(query, caseSensitive, fromIndex, fromMatchStart, fromMatchLength, direction);
+            if (version !== modelVersion) {
+              return;
+            }
+            if (result) {
+              webview.postMessage({
+                type: 'searchResult',
+                version,
+                found: true,
+                filteredIndex: result.filteredIndex,
+                matchStart: result.matchStart,
+                matchLength: result.matchLength
+              });
+            } else {
+              webview.postMessage({ type: 'searchResult', version, found: false });
+            }
+          } catch {
+            // ignore search errors (e.g. cancelled)
           }
           break;
         }
@@ -1176,6 +1360,13 @@ class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogFishDocu
     </div>
     <div id="scrollbar" class="scrollbar">
       <div id="scrollbarThumb" class="scrollbar-thumb"></div>
+    </div>
+    <div id="searchBox" class="search-box" hidden>
+      <input id="searchInput" type="text" placeholder="Find..." autocomplete="off" spellcheck="false" />
+      <span id="searchStatus" class="search-status"></span>
+      <button id="searchPrevBtn" class="search-nav" type="button" title="Previous match (Shift+Enter)">&#8593;</button>
+      <button id="searchNextBtn" class="search-nav" type="button" title="Next match (Enter)">&#8595;</button>
+      <button id="searchCloseBtn" class="search-close" type="button" title="Close (Escape)">&#215;</button>
     </div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>

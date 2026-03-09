@@ -17,6 +17,12 @@
   const excludeFilterInput = document.getElementById('excludeFilterInput');
   const excludeFilterDropdown = document.getElementById('excludeFilterDropdown');
   const excludeFilterToggle = document.getElementById('excludeFilterToggle');
+  const searchBox = document.getElementById('searchBox');
+  const searchInput = document.getElementById('searchInput');
+  const searchStatusEl = document.getElementById('searchStatus');
+  const searchPrevBtn = document.getElementById('searchPrevBtn');
+  const searchNextBtn = document.getElementById('searchNextBtn');
+  const searchCloseBtn = document.getElementById('searchCloseBtn');
 
   const OVERSCAN_ROWS = 20;
   const FETCH_CHUNK_SIZE = 300;
@@ -46,6 +52,15 @@
   let dragStartScrollTop = 0;
   let rememberedLine = null;
   let pendingScrollToRemembered = false;
+
+  const search = {
+    visible: false,
+    query: '',
+    caseSensitive: false,
+    match: null,   // { filteredIndex, matchStart, matchLength } | null
+    searching: false,
+    pendingHScroll: false
+  };
 
   const escapeHtml = (value) =>
     value
@@ -301,7 +316,17 @@
     const ruleIndex = checkRules(line.t);
     const className = ruleIndex >= 0 ? state.rules[ruleIndex].className : '';
     const classes = className ? `row ${className}` : 'row';
-    return `<div class="${classes}" data-line="${line.n}" data-index="${index}"><span class="ln">${line.n}</span><span class="txt">${escapeHtml(line.t)}</span></div>`;
+    let txtHtml;
+    if (search.match && search.match.filteredIndex === index) {
+      const { matchStart, matchLength } = search.match;
+      const before = escapeHtml(line.t.slice(0, matchStart));
+      const matched = escapeHtml(line.t.slice(matchStart, matchStart + matchLength));
+      const after = escapeHtml(line.t.slice(matchStart + matchLength));
+      txtHtml = `${before}<span class="search-match">${matched}</span>${after}`;
+    } else {
+      txtHtml = escapeHtml(line.t);
+    }
+    return `<div class="${classes}" data-line="${line.n}" data-index="${index}"><span class="ln">${line.n}</span><span class="txt">${txtHtml}</span></div>`;
   };
 
   const getLineHeight = () => {
@@ -549,6 +574,30 @@
 
     rows.innerHTML = textHtml.join('');
 
+    if (search.pendingHScroll) {
+      search.pendingHScroll = false;
+      if (hscroll) {
+        const matchEl = rows.querySelector('.search-match');
+        if (matchEl) {
+          const hRect = hscroll.getBoundingClientRect();
+          const mRect = matchEl.getBoundingClientRect();
+          const lnEl = rows.querySelector('.ln');
+          const lnWidth = lnEl ? lnEl.offsetWidth : 0;
+          const leftPad = lnWidth + 8;
+          const rightPad = 40;
+          const relLeft = mRect.left - hRect.left + hscroll.scrollLeft;
+          const relRight = relLeft + mRect.width;
+          const viewLeft = hscroll.scrollLeft;
+          const viewRight = viewLeft + hscroll.clientWidth;
+          if (relLeft < viewLeft + leftPad) {
+            hscroll.scrollLeft = Math.max(0, relLeft - leftPad);
+          } else if (relRight > viewRight - rightPad) {
+            hscroll.scrollLeft = relRight - hscroll.clientWidth + rightPad;
+          }
+        }
+      }
+    }
+
     updateScrollbar();
   };
 
@@ -584,6 +633,18 @@
   };
 
   const handleKeydown = (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'f') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!search.visible) {
+        showSearch();
+      } else if (search.query) {
+        doSearchNext('next');
+      } else {
+        if (searchInput) { searchInput.focus(); }
+      }
+      return;
+    }
     if (isEditableElement(document.activeElement)) {
       return;
     }
@@ -756,6 +817,7 @@
         state.matchedLines = 0;
         state.maxLineNumber = 0;
         virtualScrollTop = 0;
+        search.match = null;
         scheduleRender();
         setStatus('Loading...');
         break;
@@ -865,6 +927,27 @@
         }
         break;
       }
+      case 'searchResult': {
+        const version = Number.parseInt(String(message.version ?? '-1'), 10);
+        if (version !== state.version) { return; }
+        search.searching = false;
+        if (message.found) {
+          search.match = {
+            filteredIndex: Number.parseInt(String(message.filteredIndex ?? '0'), 10),
+            matchStart: Number.parseInt(String(message.matchStart ?? '0'), 10),
+            matchLength: Number.parseInt(String(message.matchLength ?? '0'), 10)
+          };
+          search.pendingHScroll = true;
+          scrollToLineIndex(search.match.filteredIndex);
+          if (searchStatusEl) { searchStatusEl.textContent = ''; }
+          scheduleRender();
+        } else {
+          search.match = null;
+          if (searchStatusEl) { searchStatusEl.textContent = 'No results'; }
+          scheduleRender();
+        }
+        break;
+      }
       case 'error': {
         setStatus(message.message || 'Error');
         break;
@@ -875,4 +958,72 @@
   });
 
   vscode.postMessage({ type: 'ready' });
+
+  // ---------------------------------------------------------------------------
+  // Search
+  // ---------------------------------------------------------------------------
+  const showSearch = () => {
+    if (!searchBox) { return; }
+    search.visible = true;
+    searchBox.removeAttribute('hidden');
+    if (searchInput) {
+      searchInput.focus();
+      searchInput.select();
+    }
+  };
+
+  const hideSearch = () => {
+    if (!searchBox) { return; }
+    search.visible = false;
+    search.match = null;
+    searchBox.setAttribute('hidden', '');
+    scheduleRender();
+  };
+
+  const doSearchNext = (direction) => {
+    const query = searchInput ? searchInput.value : '';
+    if (!query) { return; }
+    search.query = query;
+    search.searching = true;
+    if (searchStatusEl) { searchStatusEl.textContent = '…'; }
+    const fromIndex = search.match
+      ? search.match.filteredIndex
+      : Math.max(-1, Math.floor(virtualScrollTop / getLineHeight()) - 1);
+    const fromMatchStart = search.match ? search.match.matchStart : -1;
+    const fromMatchLength = search.match ? search.match.matchLength : 0;
+    vscode.postMessage({
+      type: 'searchNext',
+      query,
+      caseSensitive: search.caseSensitive,
+      fromIndex,
+      fromMatchStart,
+      fromMatchLength,
+      direction: direction || 'next',
+      version: state.version
+    });
+  };
+
+  if (searchInput) {
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        doSearchNext(event.shiftKey ? 'prev' : 'next');
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        hideSearch();
+      }
+    });
+  }
+
+  if (searchCloseBtn) {
+    searchCloseBtn.addEventListener('click', () => hideSearch());
+  }
+
+  if (searchNextBtn) {
+    searchNextBtn.addEventListener('click', () => doSearchNext('next'));
+  }
+
+  if (searchPrevBtn) {
+    searchPrevBtn.addEventListener('click', () => doSearchNext('prev'));
+  }
 })();

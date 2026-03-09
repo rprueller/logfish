@@ -305,3 +305,78 @@ body {
   white-space: pre;
   overflow: visible;
 }
+
+/* Search widget */
+.search-box[hidden] {
+  display: none;
+}
+
+.search-box {
+  position: absolute;
+  top: 6px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, rgba(0, 0, 0, 0.3)));
+  border-radius: 4px;
+  padding: 3px 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+#searchInput {
+  width: 180px;
+  height: var(--filter-input-height);
+  border-radius: 4px;
+  border: 1px solid var(--vscode-input-border, rgba(0, 0, 0, 0.2));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  padding: 0 5px;
+  outline: none;
+  box-sizing: border-box;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 13px);
+}
+
+#searchInput:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.search-status {
+  font-size: calc(var(--vscode-editor-font-size) * 0.85);
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  min-width: 56px;
+  text-align: right;
+}
+
+.search-nav,
+.search-close {
+  background: none;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: calc(var(--vscode-editor-font-size) * 0.9);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-nav:hover,
+.search-close:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+/* Search match highlight - inverted editor colors */
+.search-match {
+  color: var(--vscode-editor-background);
+  background: var(--vscode-editor-foreground);
+  outline: 1px solid var(--vscode-editor-foreground);
+}
