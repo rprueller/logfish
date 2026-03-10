@@ -235,6 +235,30 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
           }
           break;
         }
+        case 'requestGotoLine': {
+          const version = Number.parseInt(String(message.version ?? '-1'), 10);
+          if (version !== modelVersion) {
+            return;
+          }
+          const input = await vscode.window.showInputBox({
+            prompt: 'Go to line',
+            placeHolder: 'Line number',
+            validateInput: (value) => {
+              const num = Number.parseInt(value, 10);
+              if (!Number.isFinite(num) || num < 1) {
+                return 'Please enter a valid line number';
+              }
+              return '';
+            }
+          });
+          if (!input) {
+            return;
+          }
+          const lineNumber = Number.parseInt(input, 10);
+          const index = model.findClosestFilteredIndex(lineNumber);
+          webview.postMessage({ type: 'gotoLine', version, index });
+          break;
+        }
         default:
           break;
       }

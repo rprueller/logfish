@@ -25,6 +25,15 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
   };
 
   const handleKeydown = (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'g') {
+      event.preventDefault();
+      event.stopPropagation();
+      vscode.postMessage({
+        type: 'requestGotoLine',
+        version: state.version
+      });
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key === 'f') {
       event.preventDefault();
       event.stopPropagation();
@@ -367,6 +376,16 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         } else {
           searchManager.match = null;
           if (dom.searchStatusEl) { dom.searchStatusEl.textContent = 'No results'; }
+          renderer.scheduleRender();
+        }
+        break;
+      }
+      case 'gotoLine': {
+        const version = Number.parseInt(String(message.version ?? '-1'), 10);
+        if (version !== state.version) { return; }
+        const index = Number.parseInt(String(message.index ?? '-1'), 10);
+        if (index >= 0) {
+          scrollManager.scrollToLineIndex(index);
           renderer.scheduleRender();
         }
         break;
