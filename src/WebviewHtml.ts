@@ -12,16 +12,39 @@ function getNonce(): string {
 }
 
 export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logView.js'));
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logView.css'));
   const nonce = getNonce();
+
+  // Generate URIs for all module scripts
+  const moduleScripts = [
+    'utils.js',
+    'domElements.js',
+    'state.js',
+    'highlighting.js',
+    'scrolling.js',
+    'rendering.js',
+    'filtering.js',
+    'search.js',
+    'eventHandlers.js',
+    'logView.js'
+  ];
+
+  const scriptUris = moduleScripts.map(script => 
+    webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', script)).toString()
+  );
 
   const templatePath = path.join(extensionUri.fsPath, 'media', 'logView.html');
   const template = fs.readFileSync(templatePath, 'utf8');
 
-  return template
+  let html = template
     .split('{{NONCE}}').join(nonce)
     .split('{{CSP_SOURCE}}').join(webview.cspSource)
-    .split('{{STYLE_URI}}').join(styleUri.toString())
-    .split('{{SCRIPT_URI}}').join(scriptUri.toString());
+    .split('{{STYLE_URI}}').join(styleUri.toString());
+
+  // Replace script URIs
+  for (let i = 0; i < moduleScripts.length; i++) {
+    html = html.split(`{{SCRIPT_${i}_URI}}`).join(scriptUris[i]);
+  }
+
+  return html;
 }
