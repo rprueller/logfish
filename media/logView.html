@@ -14,7 +14,7 @@
     <div class="filter-rows">
       <div class="filter-row">
         <div class="filter-wrap">
-          <input id="filterInput" type="text" placeholder="Include filter (regex)" />
+          <input id="filterInput" class="filter-input" type="text" placeholder="Include filter (regex)" />
           <button id="filterToggle" class="filter-toggle" type="button" title="Show saved filters" aria-expanded="false">&#9660;</button>
           <div id="filterDropdown" class="filter-dropdown" hidden></div>
         </div>
@@ -22,8 +22,8 @@
       </div>
       <div class="filter-row">
         <div class="filter-wrap">
-          <input id="excludeFilterInput" type="text" placeholder="Exclude filter (regex)" />
-          <button id="excludeFilterToggle" class="filter-toggle filter-toggle--exclude" type="button" title="Show saved exclude filters" aria-expanded="false">&#9660;</button>
+          <input id="excludeFilterInput" class="filter-input" type="text" placeholder="Exclude filter (regex)" />
+          <button id="excludeFilterToggle" class="filter-toggle" type="button" title="Show saved exclude filters" aria-expanded="false">&#9660;</button>
           <div id="excludeFilterDropdown" class="filter-dropdown" hidden></div>
         </div>
         <button id="caseExclude" class="case" type="button" aria-pressed="false" title="Match case (exclude)">Aa</button>
@@ -45,8 +45,8 @@
     <div id="searchBox" class="search-box" hidden>
       <input id="searchInput" type="text" placeholder="Find..." autocomplete="off" spellcheck="false" />
       <span id="searchStatus" class="search-status"></span>
-      <button id="searchPrevBtn" class="search-nav" type="button" title="Previous match (Shift+Enter)">&#8593;</button>
-      <button id="searchNextBtn" class="search-nav" type="button" title="Next match (Enter)">&#8595;</button>
+      <button id="searchPrevBtn" class="search-nav" type="button" title="Previous match (Shift+Enter)">&#9664;</button>
+      <button id="searchNextBtn" class="search-nav" type="button" title="Next match (Enter)">&#9654;</button>
       <button id="searchCloseBtn" class="search-close" type="button" title="Close (Escape)">&#215;</button>
     </div>
   </div>

@@ -26,7 +26,7 @@ class FilterWidget {
       html.push(
         `<div class="filter-dropdown-item" data-value="${esc}">` +
         `<span class="filter-dropdown-text">${esc}</span>` +
-        `<button class="filter-dropdown-delete" data-action="delete" data-value="${esc}" title="Delete">\u00d7</button>` +
+        `<button class="filter-dropdown-delete" data-action="delete" data-value="${esc}" title="Delete">&#215;</button>` +
         `</div>`
       );
     }
