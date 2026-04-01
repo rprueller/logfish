@@ -168,8 +168,8 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
           if (version !== modelVersion || !Number.isFinite(lineNumber) || lineNumber < 1) {
             return;
           }
-          const index = model.findClosestFilteredIndex(lineNumber);
-          webview.postMessage({ type: 'closestIndexResult', version, index });
+          const result = model.findClosestFilteredIndex(lineNumber);
+          webview.postMessage({ type: 'closestIndexResult', version, index: result.index, exact: result.exact });
           break;
         }
         case 'requestRules': {
@@ -235,7 +235,8 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
                 found: true,
                 filteredIndex: result.filteredIndex,
                 matchStart: result.matchStart,
-                matchLength: result.matchLength
+                matchLength: result.matchLength,
+                lineNumber: model.getFilteredLineNumber(result.filteredIndex)
               });
             } else {
               webview.postMessage({ type: 'searchResult', version, found: false });

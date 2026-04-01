@@ -7,8 +7,6 @@ class ScrollManager {
     this.scheduleRender = scheduleRender;
     this.cacheManager = cacheManager;
     this.virtualScrollTop = 0;
-    this.rememberedLine = null;
-    this.pendingScrollToRemembered = false;
   }
 
   getLineHeight() {
@@ -42,53 +40,6 @@ class ScrollManager {
     this.virtualScrollTop = next;
     this.scheduleRender();
     this.updateScrollbar();
-  }
-
-  rememberLine(lineNumber) {
-    if (!Number.isFinite(lineNumber)) {
-      return;
-    }
-    this.rememberedLine = lineNumber;
-  }
-
-  rememberCenterLine() {
-    if (this.state.totalLines === 0) {
-      return;
-    }
-    const lineHeight = this.getLineHeight();
-    const center = this.virtualScrollTop + this.getViewportHeight() / 2;
-    const index = Utils.clamp(Math.floor(center / lineHeight), 0, this.state.totalLines - 1);
-    const line = this.cacheManager.getCachedLine(index);
-    if (line) {
-      this.rememberLine(line.n);
-    }
-  }
-
-  rememberLineFromEvent(event) {
-    const target = event.target;
-    if (!(target instanceof Element)) {
-      return false;
-    }
-    const lineNumber = Utils.getLineNumberFromElement(target);
-    if (!Number.isFinite(lineNumber)) {
-      return false;
-    }
-    this.rememberLine(lineNumber);
-    return true;
-  }
-
-  rememberLineFromSelection() {
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-      return false;
-    }
-    const range = selection.getRangeAt(0);
-    const lineNumber = Utils.getLineNumberFromNode(range.startContainer);
-    if (!Number.isFinite(lineNumber)) {
-      return false;
-    }
-    this.rememberLine(lineNumber);
-    return true;
   }
 
   getThumbMetrics() {
@@ -126,21 +77,5 @@ class ScrollManager {
     const lineHeight = this.getLineHeight();
     const targetTop = index * lineHeight - (this.getViewportHeight() / 2 - lineHeight / 2);
     this.setVirtualScrollTop(targetTop);
-  }
-
-  getRememberedLine() {
-    return this.rememberedLine;
-  }
-
-  setRememberedLine(line) {
-    this.rememberedLine = line;
-  }
-
-  getPendingScrollToRemembered() {
-    return this.pendingScrollToRemembered;
-  }
-
-  setPendingScrollToRemembered(value) {
-    this.pendingScrollToRemembered = value;
   }
 }

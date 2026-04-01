@@ -306,6 +306,11 @@ input:focus {
   opacity: 0.65;
 }
 
+.row.is-current .ln {
+  font-weight: bold;
+  color: var(--vscode-editorLineNumber-activeForeground);
+}
+
 .ln {
   font-family: var(--font-family);
   font-weight: normal;

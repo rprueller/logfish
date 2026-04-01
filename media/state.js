@@ -18,6 +18,10 @@ class AppState {
     this.totalFileLines = 0;
     this.backendLabel = '';
     this.indexing = false;
+    this.modelBusy = false;
+    this.currentLine = null;
+    this.currentLineIndex = null;
+    this.currentLineExact = false;
   }
 }
 

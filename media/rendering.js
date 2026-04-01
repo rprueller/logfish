@@ -23,7 +23,8 @@ class Renderer {
     }
     const ruleIndex = this.highlightRules.checkRules(line.t);
     const className = ruleIndex >= 0 ? this.highlightRules.rules[ruleIndex].className : '';
-    const classes = className ? `row ${className}` : 'row';
+    const isCurrent = this.state.currentLineExact && this.state.currentLineIndex === index;
+    const classes = [className ? `row ${className}` : 'row', isCurrent ? 'is-current' : ''].filter(Boolean).join(' ');
     let txtHtml;
     if (this.search.match && this.search.match.filteredIndex === index) {
       const { matchStart, matchLength } = this.search.match;

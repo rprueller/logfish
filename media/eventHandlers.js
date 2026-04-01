@@ -16,7 +16,6 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
     }
     if (maxScrollTop > 0 && verticalDelta !== 0) {
       scrollManager.setVirtualScrollTop(scrollManager.getVirtualScrollTop() + verticalDelta);
-      scrollManager.rememberCenterLine();
     }
 
     if (horizontalDelta !== 0 || (maxScrollTop > 0 && verticalDelta !== 0)) {
@@ -51,38 +50,80 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
     }
     const lineHeight = scrollManager.getLineHeight();
     const pageDelta = Math.max(lineHeight, scrollManager.getViewportHeight() - lineHeight);
+    const pageLines = Math.round(pageDelta / lineHeight);
+
+    const updateCurrentLine = (newIndex) => {
+      if (state.modelBusy || state.totalLines <= 0) { return; }
+      const clamped = Utils.clamp(newIndex, 0, state.totalLines - 1);
+      state.currentLineIndex = clamped;
+      const cached = cacheManager.getCachedLine(clamped);
+      if (cached) {
+        state.currentLine = cached.n;
+        state.currentLineExact = true;
+      } else {
+        state.currentLineExact = false;
+      }
+    };
+
+    const baseIndex = state.currentLineIndex !== null
+      ? state.currentLineIndex
+      : Math.floor((scrollManager.getVirtualScrollTop() + scrollManager.getViewportHeight() / 2) / lineHeight);
+
     switch (event.key) {
       case 'ArrowUp':
         scrollManager.setVirtualScrollTop(scrollManager.getVirtualScrollTop() - lineHeight);
+        updateCurrentLine(baseIndex - 1);
         break;
       case 'ArrowDown':
         scrollManager.setVirtualScrollTop(scrollManager.getVirtualScrollTop() + lineHeight);
-        scrollManager.rememberCenterLine();
+        updateCurrentLine(baseIndex + 1);
         break;
       case 'PageUp':
         renderer.bumpSerial();
         scrollManager.setVirtualScrollTop(scrollManager.getVirtualScrollTop() - pageDelta);
-        scrollManager.rememberCenterLine();
+        updateCurrentLine(baseIndex - pageLines);
         break;
       case 'PageDown':
         renderer.bumpSerial();
         scrollManager.setVirtualScrollTop(scrollManager.getVirtualScrollTop() + pageDelta);
-        scrollManager.rememberCenterLine();
+        updateCurrentLine(baseIndex + pageLines);
         break;
       case 'Home':
         renderer.bumpSerial();
         scrollManager.setVirtualScrollTop(0);
-        scrollManager.rememberCenterLine();
+        updateCurrentLine(0);
         break;
       case 'End':
         renderer.bumpSerial();
         scrollManager.setVirtualScrollTop(scrollManager.getMaxScrollTop());
-        scrollManager.rememberCenterLine();
+        updateCurrentLine(state.totalLines - 1);
         break;
       default:
         return;
     }
     event.preventDefault();
+  };
+
+  const handleCurrentLineClick = (event) => {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      return;
+    }
+    if (state.modelBusy) {
+      return;
+    }
+    const lineNumber = Utils.getLineNumberFromElement(event.target);
+    if (lineNumber === null) {
+      return;
+    }
+    const filteredIndex = Utils.getFilteredIndexFromElement(event.target);
+    if (filteredIndex === null) {
+      return;
+    }
+    state.currentLine = lineNumber;
+    state.currentLineIndex = filteredIndex;
+    state.currentLineExact = true;
+    renderer.scheduleRender();
   };
 
   // Wheel events
@@ -127,7 +168,6 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
       const scrollDelta = (deltaY / maxThumbTop) * maxScrollTop;
       renderer.bumpSerial();
       scrollManager.setVirtualScrollTop(dragStartScrollTop + scrollDelta);
-      scrollManager.rememberCenterLine();
       event.preventDefault();
     });
 
@@ -159,18 +199,14 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
       const ratio = maxThumbTop > 0 ? thumbTop / maxThumbTop : 0;
       renderer.bumpSerial();
       scrollManager.setVirtualScrollTop(ratio * maxScrollTop);
-      scrollManager.rememberCenterLine();
       event.preventDefault();
     });
   }
 
-  // Viewport selection
+  // Viewport click — sets the current line
   if (dom.viewport) {
     dom.viewport.addEventListener('mouseup', (event) => {
-      if (scrollManager.rememberLineFromSelection()) {
-        return;
-      }
-      scrollManager.rememberLineFromEvent(event);
+      handleCurrentLineClick(event);
     });
   }
 
@@ -234,6 +270,9 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
       }
       case 'reset': {
         state.version = Number.parseInt(String(message.version ?? `${state.version + 1}`), 10);
+        state.modelBusy = true;
+        state.currentLineIndex = null;
+        state.currentLineExact = false;
         cacheManager.clearCache();
         renderer.bumpSerial();
         state.totalLines = 0;
@@ -250,6 +289,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         if (messageVersion !== state.version) {
           return;
         }
+        state.modelBusy = false;
         state.indexing = false;
         const stats = message.stats || { totalLines: 0, matchedLines: 0, maxLineNumber: 0 };
         state.totalLines = Number.parseInt(String(stats.matchedLines || 0), 10);
@@ -257,7 +297,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         state.maxLineNumber = Number.parseInt(String(stats.maxLineNumber || stats.totalLines || 0), 10);
         state.totalFileLines = Number.parseInt(String(stats.totalLines || 0), 10);
 
-        if (scrollManager.getPendingScrollToRemembered()) {
+        if (state.currentLine !== null) {
           uiHandlers.requestClosestIndex();
         } else {
           scrollManager.setVirtualScrollTop(Utils.clamp(scrollManager.getVirtualScrollTop(), 0, scrollManager.getMaxScrollTop()));
@@ -335,7 +375,9 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
           return;
         }
         const index = Number.parseInt(String(message.index ?? '-1'), 10);
-        scrollManager.setPendingScrollToRemembered(false);
+        const exact = Boolean(message.exact);
+        state.currentLineIndex = index >= 0 ? index : null;
+        state.currentLineExact = exact && index >= 0;
         if (index >= 0) {
           scrollManager.scrollToLineIndex(index);
         }
@@ -365,13 +407,20 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         if (version !== state.version) { return; }
         searchManager.searching = false;
         if (message.found) {
+          const filteredIndex = Number.parseInt(String(message.filteredIndex ?? '0'), 10);
+          const lineNumber = Number.parseInt(String(message.lineNumber ?? '-1'), 10);
           searchManager.match = {
-            filteredIndex: Number.parseInt(String(message.filteredIndex ?? '0'), 10),
+            filteredIndex,
             matchStart: Number.parseInt(String(message.matchStart ?? '0'), 10),
             matchLength: Number.parseInt(String(message.matchLength ?? '0'), 10)
           };
+          if (lineNumber > 0) {
+            state.currentLine = lineNumber;
+            state.currentLineIndex = filteredIndex;
+            state.currentLineExact = true;
+          }
           searchManager.pendingHScroll = true;
-          scrollManager.scrollToLineIndex(searchManager.match.filteredIndex);
+          scrollManager.scrollToLineIndex(filteredIndex);
           if (dom.searchStatusEl) { dom.searchStatusEl.textContent = ''; }
           renderer.scheduleRender();
         } else {

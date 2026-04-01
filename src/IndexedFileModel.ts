@@ -552,9 +552,13 @@ export class IndexedFileModel {
     }
   }
 
-  findClosestFilteredIndex(lineNumber: number): number {
+  getFilteredLineNumber(index: number): number {
+    return this.filteredLineNumbers[index] ?? -1;
+  }
+
+  findClosestFilteredIndex(lineNumber: number): { index: number; exact: boolean } {
     if (this.filteredLineNumbers.length === 0) {
-      return -1;
+      return { index: -1, exact: false };
     }
 
     let lo = 0;
@@ -564,7 +568,7 @@ export class IndexedFileModel {
       const mid = (lo + hi) >> 1;
       const current = this.filteredLineNumbers[mid];
       if (current === lineNumber) {
-        return mid;
+        return { index: mid, exact: true };
       }
       if (current < lineNumber) {
         lo = mid + 1;
@@ -574,15 +578,15 @@ export class IndexedFileModel {
     }
 
     if (lo >= this.filteredLineNumbers.length) {
-      return this.filteredLineNumbers.length - 1;
+      return { index: this.filteredLineNumbers.length - 1, exact: false };
     }
     if (hi < 0) {
-      return 0;
+      return { index: 0, exact: false };
     }
 
     const loDiff = Math.abs(this.filteredLineNumbers[lo] - lineNumber);
     const hiDiff = Math.abs(this.filteredLineNumbers[hi] - lineNumber);
-    return loDiff < hiDiff ? lo : hi;
+    return { index: loDiff < hiDiff ? lo : hi, exact: false };
   }
 
   async searchFilteredLines(

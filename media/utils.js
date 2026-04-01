@@ -51,4 +51,16 @@ class Utils {
     const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
     return this.getLineNumberFromElement(element);
   }
+
+  static getFilteredIndexFromElement(element) {
+    if (!element || typeof element.closest !== 'function') {
+      return null;
+    }
+    const row = element.closest('.row');
+    if (!row || !row.dataset) {
+      return null;
+    }
+    const index = Number.parseInt(row.dataset.index || '', 10);
+    return Number.isFinite(index) ? index : null;
+  }
 }

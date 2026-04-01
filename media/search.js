@@ -68,11 +68,10 @@ class SearchManager {
     this.query = query;
     this.searching = true;
     if (this.dom.searchStatusEl) { this.dom.searchStatusEl.textContent = '…'; }
-    const fromIndex = this.match
-      ? this.match.filteredIndex
-      : Math.max(-1, Math.floor(this.scrollManager.getVirtualScrollTop() / this.scrollManager.getLineHeight()) - 1);
-    const fromMatchStart = this.match ? this.match.matchStart : -1;
-    const fromMatchLength = this.match ? this.match.matchLength : 0;
+    const onMatchLine = this.match !== null && this.state.currentLineIndex === this.match.filteredIndex;
+    const fromIndex = onMatchLine ? this.match.filteredIndex : (this.state.currentLineIndex ?? -1);
+    const fromMatchStart = onMatchLine ? this.match.matchStart : -1;
+    const fromMatchLength = onMatchLine ? this.match.matchLength : 0;
     this.vscode.postMessage({
       type: 'searchNext',
       query,

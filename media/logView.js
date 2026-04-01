@@ -60,10 +60,6 @@
     },
     postFilterChanged() {
       if (!state.indexing) { this.setStatus('Filtering...'); }
-      if (!Number.isFinite(scrollManager.getRememberedLine())) {
-        scrollManager.rememberCenterLine();
-      }
-      scrollManager.setPendingScrollToRemembered(Number.isFinite(scrollManager.getRememberedLine()));
       vscode.postMessage({
         type: 'filterChanged',
         value: dom.filterInput ? dom.filterInput.value : '',
@@ -73,12 +69,10 @@
       });
     },
     requestClosestIndex() {
-      if (!scrollManager.getPendingScrollToRemembered() || !Number.isFinite(scrollManager.getRememberedLine())) {
-        return;
-      }
+      if (state.currentLine === null) { return; }
       vscode.postMessage({
         type: 'requestClosestIndex',
-        lineNumber: scrollManager.getRememberedLine(),
+        lineNumber: state.currentLine,
         version: state.version
       });
     },
