@@ -71,19 +71,20 @@ class FilterWidget {
     if (this.inputEl) {
       this.inputEl.addEventListener('input', () => {
         if (this.callbacks.debounceTimer) { clearTimeout(this.callbacks.debounceTimer); }
-        this.callbacks.setStatus('Filtering...');
         if (this.open) { this.renderDropdown(); }
-        this.callbacks.debounceTimer = setTimeout(() => this.callbacks.postFilterChanged(), this.state.debounceMs);
+        if (this.state.debounceMs >= 0) {
+          this.callbacks.debounceTimer = setTimeout(() => this.callbacks.postFilterChanged(), this.state.debounceMs);
+        }
       });
 
       this.inputEl.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && this.open) {
           this.closeDropdown();
           event.preventDefault();
-        } else if (event.key === 'Enter' && this.open) {
+        } else if (event.key === 'Enter') {
           if (this.callbacks.debounceTimer) { clearTimeout(this.callbacks.debounceTimer); this.callbacks.debounceTimer = null; }
           this.callbacks.postFilterChanged();
-          this.closeDropdown();
+          if (this.open) { this.closeDropdown(); }
           event.preventDefault();
         }
       });

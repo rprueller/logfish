@@ -50,6 +50,7 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
     let currentCaseSensitiveExclude = false;
     let modelVersion = 0;
     let latestRangeSerial = 0;
+    let filterChangedDuringIndex = false;
 
     const loadModel = async (
       filterText: string,
@@ -118,7 +119,12 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
             caseSensitive: currentCaseSensitive,
             caseSensitiveExclude: currentCaseSensitiveExclude
           });
+          filterChangedDuringIndex = false;
           await loadModel(currentFilter, currentExcludeFilter, currentCaseSensitive, currentCaseSensitiveExclude);
+          if (filterChangedDuringIndex) {
+            filterChangedDuringIndex = false;
+            await loadModel(currentFilter, currentExcludeFilter, currentCaseSensitive, currentCaseSensitiveExclude);
+          }
           break;
         }
         case 'filterChanged': {
@@ -133,6 +139,10 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
           const settings = this.getSettings(document.uri);
           this.filterPersistence.persistFilterState(settings, currentFilter);
           this.filterPersistence.persistExcludeFilterState(settings, currentExcludeFilter);
+          if (!model.isIndexed) {
+            filterChangedDuringIndex = true;
+            break;
+          }
           await loadModel(currentFilter, currentExcludeFilter, currentCaseSensitive, currentCaseSensitiveExclude);
           break;
         }
@@ -274,7 +284,7 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
     return {
       highlightRules: config.get<HighlightRuleConfig>('highlightRules', []),
       maxCachedLines: config.get<number>('maxCachedLines', 100000),
-      filterDelayMs: config.get<number>('filterDelayMs', 250),
+      filterDelayMs: config.get<number>('filterDelayMs', -1),
       filterPersistence: config.get('filterPersistence', 'workspaceThenGlobal')
     };
   }

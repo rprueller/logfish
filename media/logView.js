@@ -59,6 +59,7 @@
       this.updateCaseUi();
     },
     postFilterChanged() {
+      if (!state.indexing) { this.setStatus('Filtering...'); }
       if (!Number.isFinite(scrollManager.getRememberedLine())) {
         scrollManager.rememberCenterLine();
       }

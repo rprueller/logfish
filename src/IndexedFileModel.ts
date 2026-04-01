@@ -20,9 +20,14 @@ export class IndexedFileModel {
   private filteredEnds: number[] = [];
 
   private activeFilterTask: CancelableTask | null = null;
+  private indexingPromise: Promise<void> | null = null;
 
   constructor(uri: vscode.Uri) {
     this.uri = uri;
+  }
+
+  get isIndexed(): boolean {
+    return this.indexed;
   }
 
   cancelActiveFilter(): void {
@@ -36,7 +41,19 @@ export class IndexedFileModel {
     if (this.indexed) {
       return;
     }
+    if (this.indexingPromise) {
+      await this.indexingPromise;
+      return;
+    }
+    this.indexingPromise = this.doIndex(onProgress);
+    try {
+      await this.indexingPromise;
+    } finally {
+      this.indexingPromise = null;
+    }
+  }
 
+  private async doIndex(onProgress?: (update: ProgressUpdate) => void): Promise<void> {
     const stats = await fs.promises.stat(this.uri.fsPath);
     const fileSize = stats.size;
 

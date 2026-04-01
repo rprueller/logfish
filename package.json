@@ -112,10 +112,9 @@
         },
         "logFish.filterDelayMs": {
           "type": "number",
-          "default": 250,
-          "minimum": 0,
+          "default": -1,
           "scope": "resource",
-          "description": "Delay in ms before a changed filter input triggers a re-reading of the file."
+          "description": "Delay in ms before a changed filter input triggers a re-reading of the file. Use a negative value to disable auto-filtering — the filter is only applied when Enter is pressed."
         },
         "logFish.filterPersistence": {
           "type": "string",

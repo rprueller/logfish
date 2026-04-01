@@ -17,6 +17,7 @@ class AppState {
     this.savedExcludeFilters = [];
     this.totalFileLines = 0;
     this.backendLabel = '';
+    this.indexing = false;
   }
 }
 

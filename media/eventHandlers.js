@@ -182,7 +182,6 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
         clearTimeout(uiHandlers.debounceTimer);
         uiHandlers.debounceTimer = null;
       }
-      uiHandlers.setStatus('Filtering...');
       uiHandlers.postFilterChanged();
     });
   }
@@ -194,7 +193,6 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
         clearTimeout(uiHandlers.debounceTimer);
         uiHandlers.debounceTimer = null;
       }
-      uiHandlers.setStatus('Filtering...');
       uiHandlers.postFilterChanged();
     });
   }
@@ -252,6 +250,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         if (messageVersion !== state.version) {
           return;
         }
+        state.indexing = false;
         const stats = message.stats || { totalLines: 0, matchedLines: 0, maxLineNumber: 0 };
         state.totalLines = Number.parseInt(String(stats.matchedLines || 0), 10);
         state.matchedLines = state.totalLines;
@@ -285,6 +284,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         const detail = typeof progress.detail === 'string' && progress.detail.length > 0 ? progress.detail : null;
 
         if (phase === 'indexing') {
+          state.indexing = true;
           if (Number.isFinite(total) && total > 0) {
             const pct = Math.min(100, Math.floor((processed / total) * 100));
             uiHandlers.setStatus(`Indexing ${pct}%`);
@@ -295,6 +295,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         }
 
         if (phase === 'filtering') {
+          state.indexing = false;
           const backendMatch = detail ? /\b(rg|grep|JS)\b/.exec(detail) : null;
           if (backendMatch) {
             state.backendLabel = backendMatch[1] === 'JS' ? 'js' : backendMatch[1];
