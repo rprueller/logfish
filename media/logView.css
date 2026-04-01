@@ -259,7 +259,7 @@ input:focus {
   left: 0;
   right: 0;
   width: max-content;
-  min-width: 100%;
+  min-width: calc(100% + var(--scrollbar-width));
 }
 
 .scrollbar {
