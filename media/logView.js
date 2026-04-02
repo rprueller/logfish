@@ -76,6 +76,17 @@
         version: state.version
       });
     },
+    pushHistory(lineNumber) {
+      state.history = state.history.slice(0, state.historyIndex + 1);
+      if (state.history[state.history.length - 1] === lineNumber) { // also works for empty arrays
+        return;
+      }
+      if (state.history.length >= 200) {
+        state.history.shift();
+      }
+      state.history.push(lineNumber);
+      state.historyIndex = state.history.length - 1;
+    },
     includeWidget: null,
     excludeWidget: null
   };
@@ -105,7 +116,7 @@
   setupEventHandlers(state, dom, scrollManager, renderer, searchManager, cacheManager, vscode, uiHelpers);
 
   // Setup message handlers
-  setupMessageHandler(state, dom, scrollManager, renderer, searchManager, cacheManager, highlightRules, vscode, uiHelpers);
+  setupMessageHandler(state, dom, scrollManager, renderer, searchManager, cacheManager, highlightRules, uiHelpers);
 
   // Signal ready to extension
   vscode.postMessage({ type: 'ready' });

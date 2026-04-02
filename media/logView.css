@@ -70,7 +70,7 @@ input:focus {
   border-bottom: var(--border-width-thick) solid var(--vscode-panel-border);
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 20;
   overflow: visible;
 }
 

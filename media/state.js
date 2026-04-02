@@ -22,6 +22,8 @@ class AppState {
     this.currentLine = null;
     this.currentLineIndex = null;
     this.currentLineExact = false;
+    this.history = [];
+    this.historyIndex = -1;
   }
 }
 

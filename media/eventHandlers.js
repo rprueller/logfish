@@ -105,6 +105,9 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
   };
 
   const handleCurrentLineClick = (event) => {
+    if (event.button !== 0) {
+      return;
+    }
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed) {
       return;
@@ -120,11 +123,27 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
     if (filteredIndex === null) {
       return;
     }
+    uiHandlers.pushHistory(lineNumber);
     state.currentLine = lineNumber;
     state.currentLineIndex = filteredIndex;
     state.currentLineExact = true;
     renderer.scheduleRender();
   };
+
+  const navigateHistory = (delta) => {
+    const newIndex = state.historyIndex + delta;
+    if (newIndex < 0 || newIndex >= state.history.length) { return; }
+    state.historyIndex = newIndex;
+    state.currentLine = state.history[newIndex];
+    state.currentLineExact = false;
+    uiHandlers.requestClosestIndex();
+  };
+
+  // Back/forward mouse buttons
+  window.addEventListener('mousedown', (event) => {
+    if (event.button === 3) { event.preventDefault(); navigateHistory(-1); }
+    else if (event.button === 4) { event.preventDefault(); navigateHistory(1); }
+  });
 
   // Wheel events
   if (dom.hscroll) {
@@ -234,7 +253,7 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
   }
 };
 
-const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager, cacheManager, highlightRules, vscode, uiHandlers) => {
+const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager, cacheManager, highlightRules, uiHandlers) => {
   window.addEventListener('message', (event) => {
     const message = event.data;
     switch (message.type) {
@@ -415,6 +434,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
             matchLength: Number.parseInt(String(message.matchLength ?? '0'), 10)
           };
           if (lineNumber > 0) {
+            uiHandlers.pushHistory(lineNumber);
             state.currentLine = lineNumber;
             state.currentLineIndex = filteredIndex;
             state.currentLineExact = true;
