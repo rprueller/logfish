@@ -67,7 +67,7 @@ class SearchManager {
     if (!query) { return; }
     this.query = query;
     this.searching = true;
-    if (this.dom.searchStatusEl) { this.dom.searchStatusEl.textContent = '…'; }
+    if (this.dom.searchStatus) { this.dom.searchStatus.textContent = '...'; }
     const onMatchLine = this.match !== null && this.state.currentLineIndex === this.match.filteredIndex;
     const fromIndex = onMatchLine ? this.match.filteredIndex : (this.state.currentLineIndex ?? -1);
     const fromMatchStart = onMatchLine ? this.match.matchStart : -1;

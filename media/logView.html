@@ -30,9 +30,22 @@
       </div>
     </div>
     <div id="status" class="status">
-      <span id="statusTotal"></span>
-      <span id="statusFiltered"></span>
-      <span id="statusOp">Loading…</span>
+      <div class="status-row">
+        <span id="statusTotalNum" class="status-left">-</span>
+        <span class="status-right">total</span>
+      </div>
+      <div class="status-row">
+        <span id="statusFilteredNum" class="status-left">-</span>
+        <span class="status-right">matched</span>
+      </div>
+      <div class="status-row">
+        <span id="statusBackend" class="status-left"></span>
+        <span id="statusOp" class="status-right">Loading...</span>
+        <div id="profileSelector" class="profile-wrap status-right">
+          <div id="profileToggle" class="profile-toggle" hidden><span id="profileName"></span><span id="profileArrow">&#9660;</span></div>
+          <div id="profileDropdown" class="profile-dropdown" hidden></div>
+        </div>
+      </div>
     </div>
   </div>
   <div id="viewport" class="viewport">

@@ -251,6 +251,65 @@ const setupEventHandlers = (state, dom, scrollManager, renderer, searchManager, 
       uiHandlers.postFilterChanged();
     });
   }
+
+  if (dom.profileToggle && dom.profileDropdown) {
+    let profileOpen = false;
+    const updateToggleText = (open) => {
+      dom.profileName.textContent = (state.activeProfileName ?? '')
+      dom.profileArrow.innerHTML = open ? '&#9650;' : '&#9660;';
+    };
+    const openProfile = () => {
+      profileOpen = true;
+      dom.profileDropdown.removeAttribute('hidden');
+      updateToggleText(true);
+    };
+    const closeProfile = () => {
+      profileOpen = false;
+      dom.profileDropdown.setAttribute('hidden', '');
+      updateToggleText(false);
+    };
+    dom.profileToggle.addEventListener('click', () => {
+      if (profileOpen) { closeProfile(); } else { openProfile(); }
+    });
+    dom.profileDropdown.addEventListener('mousedown', (e) => { e.preventDefault(); });
+    dom.profileDropdown.addEventListener('click', (event) => {
+      const item = event.target.closest('.filter-dropdown-item[data-value]');
+      if (!item) { return; }
+      state.activeProfileName = item.dataset.value ?? '';
+      vscode.postMessage({ type: 'setHighlightProfile', name: state.activeProfileName });
+      closeProfile(); // also updates toggle text via updateToggleText
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (!profileOpen) { return; }
+      const target = event.target;
+      if (!(target instanceof Element)) { return; }
+      const wrap = dom.profileToggle.closest('.profile-wrap');
+      if (wrap && wrap.contains(target)) { return; }
+      closeProfile();
+    });
+  }
+};
+
+const populateProfileDropdown = (dom, state, profiles, activeProfileName) => {
+  if (!dom.profileDropdown) { return; }
+  dom.profileDropdown.innerHTML = '';
+  for (const name of profiles) {
+    const item = document.createElement('div');
+    item.className = 'filter-dropdown-item';
+    item.dataset.value = name;
+    const text = document.createElement('span');
+    text.className = 'filter-dropdown-text';
+    text.textContent = name;
+    item.appendChild(text);
+    dom.profileDropdown.appendChild(item);
+  }
+  state.activeProfileName = activeProfileName ?? null;
+  state.profileCount = profiles.length;
+  if (dom.profileToggle) {
+    dom.profileName.textContent = (state.activeProfileName ?? '')
+    dom.profileArrow.innerHTML = '&#9660;';
+    dom.profileToggle.hidden = state.modelBusy || profiles.length <= 1;
+  }
 };
 
 const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager, cacheManager, highlightRules, uiHandlers) => {
@@ -258,6 +317,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
     const message = event.data;
     switch (message.type) {
       case 'init': {
+        state.totalFileLines = 0;
         state.rules = highlightRules.compile(message.rules || []);
         state.debounceMs = message.debounceMs || 250;
         state.maxCachedLines = Math.max(500, Number.parseInt(String(message.maxCachedLines || '20000'), 10) || 20000);
@@ -274,14 +334,14 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
           state.caseSensitiveExclude = message.caseSensitiveExclude;
         }
         uiHandlers.updateCaseUi();
-        if (dom.dynamicStyleEl) {
-          dom.dynamicStyleEl.textContent = message.cssText || '';
+        if (dom.dynamicStyle) {
+          dom.dynamicStyle.textContent = message.cssText || '';
         }
         state.savedFilters = Array.isArray(message.savedFilters) ? message.savedFilters : [];
         state.savedExcludeFilters = Array.isArray(message.savedExcludeFilters) ? message.savedExcludeFilters : [];
-        uiHandlers.setStatus('Loading…');
-        if (dom.statusTotalEl) { dom.statusTotalEl.textContent = '…'; }
-        if (dom.statusFilteredEl) { dom.statusFilteredEl.textContent = '…'; }
+        populateProfileDropdown(dom, state, Array.isArray(message.profiles) ? message.profiles : [], message.activeProfileName ?? null);
+        uiHandlers.setStatus('Loading...');
+        uiHandlers.updateStatusCounts();
         scrollManager.setVirtualScrollTop(0);
         scrollManager.updateScrollbar();
         renderer.scheduleRender();
@@ -290,6 +350,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
       case 'reset': {
         state.version = Number.parseInt(String(message.version ?? `${state.version + 1}`), 10);
         state.modelBusy = true;
+        if (dom.profileToggle) { dom.profileToggle.hidden = true; }
         state.currentLineIndex = null;
         state.currentLineExact = false;
         cacheManager.clearCache();
@@ -300,7 +361,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         scrollManager.setVirtualScrollTop(0);
         searchManager.match = null;
         renderer.scheduleRender();
-        uiHandlers.setStatus('Loading…');
+        uiHandlers.setStatus('Loading...');
         break;
       }
       case 'modelReady': {
@@ -310,21 +371,20 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         }
         state.modelBusy = false;
         state.indexing = false;
+        if (dom.profileToggle) { dom.profileToggle.hidden = state.profileCount <= 1; }
         const stats = message.stats || { totalLines: 0, matchedLines: 0, maxLineNumber: 0 };
         state.totalLines = Number.parseInt(String(stats.matchedLines || 0), 10);
         state.matchedLines = state.totalLines;
         state.maxLineNumber = Number.parseInt(String(stats.maxLineNumber || stats.totalLines || 0), 10);
         state.totalFileLines = Number.parseInt(String(stats.totalLines || 0), 10);
-
         if (state.currentLine !== null) {
           uiHandlers.requestClosestIndex();
         } else {
           scrollManager.setVirtualScrollTop(Utils.clamp(scrollManager.getVirtualScrollTop(), 0, scrollManager.getMaxScrollTop()));
           renderer.scheduleRender();
         }
-
         uiHandlers.updateStatusCounts();
-        uiHandlers.setStatus(state.backendLabel || '—');
+        uiHandlers.setStatus(state.backendLabel || '-', false);
         scrollManager.updateScrollbar();
         renderer.scheduleRender();
         break;
@@ -348,7 +408,7 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
             const pct = Math.min(100, Math.floor((processed / total) * 100));
             uiHandlers.setStatus(`Indexing ${pct}%`);
           } else {
-            uiHandlers.setStatus('Indexing…');
+            uiHandlers.setStatus('Indexing...');
           }
           break;
         }
@@ -359,12 +419,12 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
           if (backendMatch) {
             state.backendLabel = backendMatch[1] === 'JS' ? 'js' : backendMatch[1];
           }
-          if (dom.statusFilteredEl) { dom.statusFilteredEl.textContent = `${Utils.formatNumber(matched)}\u00a0matched`; }
+          if (dom.statusFilteredNum) { dom.statusFilteredNum.textContent = Utils.formatNumber(matched); }
           if (Number.isFinite(total) && total > 0 && processed > 0) {
             const pct = Math.min(100, Math.floor((processed / total) * 100));
             uiHandlers.setStatus(`${state.backendLabel || 'js'} ${pct}%`);
           } else {
-            uiHandlers.setStatus(`${state.backendLabel || 'js'}…`);
+            uiHandlers.setStatus(`${state.backendLabel || 'js'}...`);
           }
         }
         break;
@@ -403,10 +463,19 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         renderer.scheduleRender();
         break;
       }
+      case 'profilesUpdated': {
+        state.rules = highlightRules.compile(message.rules || []);
+        if (dom.dynamicStyle) {
+          dom.dynamicStyle.textContent = message.cssText || '';
+        }
+        populateProfileDropdown(dom, state, Array.isArray(message.profiles) ? message.profiles : [], message.activeProfileName ?? null);
+        renderer.scheduleRender();
+        break;
+      }
       case 'rulesUpdated': {
         state.rules = highlightRules.compile(message.rules || []);
-        if (dom.dynamicStyleEl) {
-          dom.dynamicStyleEl.textContent = message.cssText || '';
+        if (dom.dynamicStyle) {
+          dom.dynamicStyle.textContent = message.cssText || '';
         }
         renderer.scheduleRender();
         break;
@@ -441,11 +510,11 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
           }
           searchManager.pendingHScroll = true;
           scrollManager.scrollToLineIndex(filteredIndex);
-          if (dom.searchStatusEl) { dom.searchStatusEl.textContent = ''; }
+          if (dom.searchStatus) { dom.searchStatus.textContent = ''; }
           renderer.scheduleRender();
         } else {
           searchManager.match = null;
-          if (dom.searchStatusEl) { dom.searchStatusEl.textContent = 'No results'; }
+          if (dom.searchStatus) { dom.searchStatus.textContent = 'No results'; }
           renderer.scheduleRender();
         }
         break;

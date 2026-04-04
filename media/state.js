@@ -24,6 +24,8 @@ class AppState {
     this.currentLineExact = false;
     this.history = [];
     this.historyIndex = -1;
+    this.activeProfileName = null;
+    this.profileCount = 0;
   }
 }
 

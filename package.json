@@ -72,6 +72,7 @@
           "type": "array",
           "default": [
             {
+              "name": "Default",
               "filePattern": ".*\\.log",
               "rules": [
                 {
@@ -101,7 +102,7 @@
             }
           ],
           "scope": "resource",
-          "description": "Per-line highlighting rules or rule groups. Global rules will always be used, whereas only the first matching file pattern will be effective. Rule: { pattern, patternIgnoreCase?, color?, background?, fontStyle?, fontWeight? }. Group: { filePattern, filePatternIgnoreCase?, rules: [...] } applied when the full path matches."
+          "description": "Per-line highlighting rules or rule groups. Global rules will always be used, whereas only the first matching file pattern will be effective. Rule: { pattern, patternIgnoreCase?, color?, background?, fontStyle?, fontWeight? }. Group: { name?, filePattern, filePatternIgnoreCase?, rules: [...] } — name sets the profile label shown in the UI (defaults to filePattern)."
         },
         "logFish.maxCachedLines": {
           "type": "number",

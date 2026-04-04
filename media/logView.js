@@ -25,19 +25,33 @@
   // UI Helper functions
   const uiHelpers = {
     debounceTimer: null,
-    setStatus(message) {
-      if (dom.statusOpEl) { dom.statusOpEl.textContent = message; }
+    setStatus(status, set_op = true) {
+      if (set_op) {
+        if (dom.statusBackend) { dom.statusBackend.textContent = ''; }
+        if (dom.statusOp) { dom.statusOp.textContent = status; }
+      } else {
+        if (dom.statusBackend) { dom.statusBackend.textContent = status; }
+      }
+      if (dom.profileDropdown) { dom.profileDropdown.hidden = true; }
+      if (dom.profileSelector) {
+        dom.profileSelector.hidden = set_op;
+        dom.profileSelector.style.display = set_op ? "none" : "block";
+      }
+      if (dom.statusOp) {
+        dom.statusOp.hidden = !set_op;
+        dom.statusOp.style.display = set_op ? "block" : "none"
+      }
     },
     updateStatusCounts() {
-      if (dom.statusTotalEl) {
-        dom.statusTotalEl.textContent = state.totalFileLines > 0
-          ? `${Utils.formatNumber(state.totalFileLines)} total`
-          : '…';
+      if (dom.statusTotalNum) {
+        dom.statusTotalNum.textContent = state.totalFileLines > 0
+          ? `${Utils.formatNumber(state.totalFileLines)}`
+          : '-';
       }
-      if (dom.statusFilteredEl) {
-        dom.statusFilteredEl.textContent = state.totalFileLines > 0
-          ? `${Utils.formatNumber(state.matchedLines)} matched`
-          : '…';
+      if (dom.statusFilteredNum) {
+        dom.statusFilteredNum.textContent = state.totalFileLines > 0
+          ? `${Utils.formatNumber(state.matchedLines)}`
+          : '-';
       }
     },
     updateCaseUi() {

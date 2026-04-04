@@ -17,9 +17,20 @@ export type HighlightRuleResolved = HighlightRule & {
 };
 
 export type HighlightRuleGroup = {
+  name?: string;
   filePattern: string;
   filePatternIgnoreCase?: boolean;
   rules: HighlightRule[];
+};
+
+export type HighlightRuleProfile = {
+  name: string;
+  rules: HighlightRule[];
+};
+
+export type HighlightRulesResult = {
+  profiles: HighlightRuleProfile[];
+  autoSelectedName: string | null;
 };
 
 export type HighlightRuleConfig = Array<HighlightRule | HighlightRuleGroup>;

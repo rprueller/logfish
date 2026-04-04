@@ -129,9 +129,9 @@ class Renderer {
     const start = Math.max(0, Math.floor(virtualScrollTop / lineHeight) - Renderer.OVERSCAN_ROWS);
     const end = Math.min(total, Math.ceil((virtualScrollTop + height) / lineHeight) + Renderer.OVERSCAN_ROWS);
 
-    if (this.dom.layoutStyleEl) {
+    if (this.dom.layoutStyle) {
       const offset = start * lineHeight - virtualScrollTop;
-      this.dom.layoutStyleEl.textContent = `#rows { top: ${offset}px; }`;
+      this.dom.layoutStyle.textContent = `#rows { top: ${offset}px; }`;
     }
 
     const prefetchStart = Math.max(0, start - Renderer.PREFETCH_PADDING);

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { LOGFISH_VIEW_TYPE } from './Types';
-import type { LogFishSettings, HighlightRuleConfig } from './Types';
+import type { LogFishSettings, HighlightRuleConfig, HighlightRuleProfile } from './Types';
 import { LogFishDocument } from './LogFishDocument';
 import { IndexedFileModel } from './IndexedFileModel';
 import { FilterPersistenceManager } from './FilterPersistenceManager';
@@ -51,6 +51,8 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
     let modelVersion = 0;
     let latestRangeSerial = 0;
     let filterChangedDuringIndex = false;
+    let currentProfiles: HighlightRuleProfile[] = [];
+    let currentProfileName: string | null = null;
 
     const loadModel = async (
       filterText: string,
@@ -103,8 +105,13 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
       switch (message.type) {
         case 'ready': {
           const settings = this.getSettings(document.uri);
-          const rules = await this.highlightRules.loadHighlightRules(document.uri, settings.highlightRules);
-          const resolved = this.highlightRules.buildRuleStyles(rules);
+          const rulesResult = await this.highlightRules.loadRulesAndProfiles(document.uri, settings.highlightRules);
+          currentProfiles = rulesResult.profiles;
+          currentProfileName = rulesResult.autoSelectedName;
+          const activeRules = currentProfileName
+            ? this.highlightRules.getProfileRules(currentProfiles, currentProfileName)
+            : [];
+          const resolved = this.highlightRules.buildRuleStyles(activeRules);
           webview.postMessage({
             type: 'init',
             fileName: path.basename(document.uri.fsPath),
@@ -117,7 +124,9 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
             savedFilters: this.filterPersistence.readSavedFilters(settings),
             savedExcludeFilters: this.filterPersistence.readSavedExcludeFilters(settings),
             caseSensitive: currentCaseSensitive,
-            caseSensitiveExclude: currentCaseSensitiveExclude
+            caseSensitiveExclude: currentCaseSensitiveExclude,
+            profiles: currentProfiles.map((p) => p.name),
+            activeProfileName: currentProfileName
           });
           filterChangedDuringIndex = false;
           await loadModel(currentFilter, currentExcludeFilter, currentCaseSensitive, currentCaseSensitiveExclude);
@@ -172,9 +181,25 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
           webview.postMessage({ type: 'closestIndexResult', version, index: result.index, exact: result.exact });
           break;
         }
+        case 'setHighlightProfile': {
+          const profileName = String(message.name ?? '');
+          if (!currentProfiles.find((p) => p.name === profileName)) { break; }
+          currentProfileName = profileName;
+          const rules = this.highlightRules.getProfileRules(currentProfiles, currentProfileName);
+          const resolved = this.highlightRules.buildRuleStyles(rules);
+          webview.postMessage({ type: 'rulesUpdated', rules: resolved.rules, cssText: resolved.cssText });
+          break;
+        }
         case 'requestRules': {
           const settings = this.getSettings(document.uri);
-          const rules = await this.highlightRules.loadHighlightRules(document.uri, settings.highlightRules);
+          const rulesResult = await this.highlightRules.loadRulesAndProfiles(document.uri, settings.highlightRules);
+          currentProfiles = rulesResult.profiles;
+          if (!currentProfileName || !currentProfiles.find((p) => p.name === currentProfileName)) {
+            currentProfileName = rulesResult.autoSelectedName;
+          }
+          const rules = currentProfileName
+            ? this.highlightRules.getProfileRules(currentProfiles, currentProfileName)
+            : [];
           const resolved = this.highlightRules.buildRuleStyles(rules);
           webview.postMessage({ type: 'rulesUpdated', rules: resolved.rules, cssText: resolved.cssText });
           break;
@@ -275,8 +300,30 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
       }
     });
 
+    const configDisposable = vscode.workspace.onDidChangeConfiguration(async (e) => {
+      if (!e.affectsConfiguration('logFish', document.uri)) { return; }
+      const settings = this.getSettings(document.uri);
+      const rulesResult = await this.highlightRules.loadRulesAndProfiles(document.uri, settings.highlightRules);
+      currentProfiles = rulesResult.profiles;
+      if (!currentProfileName || !currentProfiles.find((p) => p.name === currentProfileName)) {
+        currentProfileName = rulesResult.autoSelectedName;
+      }
+      const rules = currentProfileName
+        ? this.highlightRules.getProfileRules(currentProfiles, currentProfileName)
+        : [];
+      const resolved = this.highlightRules.buildRuleStyles(rules);
+      webview.postMessage({
+        type: 'profilesUpdated',
+        profiles: currentProfiles.map((p) => p.name),
+        activeProfileName: currentProfileName,
+        rules: resolved.rules,
+        cssText: resolved.cssText
+      });
+    });
+
     webviewPanel.onDidDispose(() => {
       model.cancelActiveFilter();
+      configDisposable.dispose();
     });
   }
 

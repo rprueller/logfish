@@ -3,11 +3,13 @@ import type {
   HighlightRule,
   HighlightRuleResolved,
   HighlightRuleGroup,
-  HighlightRuleConfig
+  HighlightRuleConfig,
+  HighlightRuleProfile,
+  HighlightRulesResult
 } from './Types';
 
 export class HighlightRuleManager {
-  async loadHighlightRules(uri: vscode.Uri, fallback: HighlightRuleConfig): Promise<HighlightRule[]> {
+  async loadRulesAndProfiles(uri: vscode.Uri, fallback: HighlightRuleConfig): Promise<HighlightRulesResult> {
     const folder = vscode.workspace.getWorkspaceFolder(uri);
     let configRules: HighlightRuleConfig = fallback;
 
@@ -22,7 +24,12 @@ export class HighlightRuleManager {
       }
     }
 
-    return this.resolveHighlightRulesForFile(uri, configRules);
+    return this.buildProfiles(configRules, uri.fsPath);
+  }
+
+  getProfileRules(profiles: HighlightRuleProfile[], profileName: string): HighlightRule[] {
+    const profile = profiles.find((p) => p.name === profileName);
+    return profile ? profile.rules : [];
   }
 
   buildRuleStyles(rules: HighlightRule[]): { rules: HighlightRuleResolved[]; cssText: string } {
@@ -58,6 +65,33 @@ export class HighlightRuleManager {
     return { rules: resolved, cssText: cssLines.join('\n') };
   }
 
+  private buildProfiles(configRules: HighlightRuleConfig, filePath: string): HighlightRulesResult {
+    const profiles: HighlightRuleProfile[] = [];
+    const globalRules: HighlightRule[] = [];
+    let autoSelectedName: string | null = null;
+
+    for (const entry of configRules) {
+      if (this.isHighlightRuleGroup(entry)) {
+        const effectiveName = entry.name || entry.filePattern;
+        profiles.push({ name: effectiveName, rules: entry.rules.filter((r) => this.isHighlightRule(r)) });
+        if (autoSelectedName === null && this.matchesFilePattern(filePath, entry.filePattern, entry.filePatternIgnoreCase)) {
+          autoSelectedName = effectiveName;
+        }
+      } else if (this.isHighlightRule(entry)) {
+        globalRules.push(entry);
+      }
+    }
+
+    if (globalRules.length > 0) {
+      profiles.push({ name: 'Default', rules: globalRules });
+      if (autoSelectedName === null) {
+        autoSelectedName = 'Default';
+      }
+    }
+
+    return { profiles, autoSelectedName };
+  }
+
   private async readRuleFile(uri: vscode.Uri): Promise<HighlightRuleConfig | null> {
     try {
       const data = await vscode.workspace.fs.readFile(uri);
@@ -73,23 +107,6 @@ export class HighlightRuleManager {
       return null;
     }
     return null;
-  }
-
-  private resolveHighlightRulesForFile(uri: vscode.Uri, configRules: HighlightRuleConfig): HighlightRule[] {
-    const filePath = uri.fsPath;
-    const resolved: HighlightRule[] = [];
-    let foundGroup = false;
-    for (const entry of configRules) {
-      if (!foundGroup && this.isHighlightRuleGroup(entry)) {
-        if (this.matchesFilePattern(filePath, entry.filePattern, entry.filePatternIgnoreCase)) {
-          resolved.push(...entry.rules.filter((rule) => this.isHighlightRule(rule)));
-          foundGroup = true;
-        }
-      } else if (this.isHighlightRule(entry)) {
-        resolved.push(entry);
-      }
-    }
-    return resolved;
   }
 
   private isHighlightRuleGroup(value: unknown): value is HighlightRuleGroup {
