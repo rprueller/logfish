@@ -463,11 +463,13 @@ const setupMessageHandler = (state, dom, scrollManager, renderer, searchManager,
         renderer.scheduleRender();
         break;
       }
-      case 'profilesUpdated': {
+      case 'settingsUpdated': {
+        if (typeof message.debounceMs === 'number') { state.debounceMs = message.debounceMs; }
+        if (typeof message.maxCachedLines === 'number') { state.maxCachedLines = Math.max(500, message.maxCachedLines); }
+        if (Array.isArray(message.savedFilters)) { state.savedFilters = message.savedFilters; }
+        if (Array.isArray(message.savedExcludeFilters)) { state.savedExcludeFilters = message.savedExcludeFilters; }
         state.rules = highlightRules.compile(message.rules || []);
-        if (dom.dynamicStyle) {
-          dom.dynamicStyle.textContent = message.cssText || '';
-        }
+        if (dom.dynamicStyle) { dom.dynamicStyle.textContent = message.cssText || ''; }
         populateProfileDropdown(dom, state, Array.isArray(message.profiles) ? message.profiles : [], message.activeProfileName ?? null);
         renderer.scheduleRender();
         break;

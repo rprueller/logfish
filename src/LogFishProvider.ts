@@ -313,7 +313,11 @@ export class LogFishProvider implements vscode.CustomReadonlyEditorProvider<LogF
         : [];
       const resolved = this.highlightRules.buildRuleStyles(rules);
       webview.postMessage({
-        type: 'profilesUpdated',
+        type: 'settingsUpdated',
+        debounceMs: settings.filterDelayMs,
+        maxCachedLines: settings.maxCachedLines,
+        savedFilters: this.filterPersistence.readSavedFilters(settings),
+        savedExcludeFilters: this.filterPersistence.readSavedExcludeFilters(settings),
         profiles: currentProfiles.map((p) => p.name),
         activeProfileName: currentProfileName,
         rules: resolved.rules,
